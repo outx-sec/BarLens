@@ -1,0 +1,291 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 540" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#070814"/>
+      <stop offset="48%" stop-color="#0D1026"/>
+      <stop offset="100%" stop-color="#09182B"/>
+    </linearGradient>
+
+    <radialGradient id="nebulaCyan" cx="72%" cy="28%" r="48%">
+      <stop offset="0%" stop-color="#00D2FF" stop-opacity="0.28"/>
+      <stop offset="55%" stop-color="#3A7BD5" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+
+    <radialGradient id="nebulaPurple" cx="26%" cy="72%" r="50%">
+      <stop offset="0%" stop-color="#9D50BB" stop-opacity="0.26"/>
+      <stop offset="55%" stop-color="#6E48AA" stop-opacity="0.09"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="iconSquircle" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#141833"/>
+      <stop offset="50%" stop-color="#0B0E21"/>
+      <stop offset="100%" stop-color="#19102C"/>
+    </linearGradient>
+
+    <linearGradient id="fresnelRim" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.92"/>
+      <stop offset="35%" stop-color="#7EE8FA" stop-opacity="0.55"/>
+      <stop offset="70%" stop-color="#C471ED" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.65"/>
+    </linearGradient>
+
+    <radialGradient id="eclipseCore" cx="35%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#80FFDB"/>
+      <stop offset="45%" stop-color="#00B4D8"/>
+      <stop offset="100%" stop-color="#03045E"/>
+    </radialGradient>
+
+    <linearGradient id="glassFill" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.20"/>
+      <stop offset="45%" stop-color="#A5F3FC" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#0F172A" stop-opacity="0.52"/>
+    </linearGradient>
+
+    <linearGradient id="topMenuBarGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1E243B" stop-opacity="0.88"/>
+      <stop offset="100%" stop-color="#111526" stop-opacity="0.92"/>
+    </linearGradient>
+
+    <linearGradient id="purplePillGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#A855F7" stop-opacity="0.38"/>
+      <stop offset="100%" stop-color="#7E22CE" stop-opacity="0.22"/>
+    </linearGradient>
+
+    <linearGradient id="titleGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="55%" stop-color="#E0F2FE"/>
+      <stop offset="100%" stop-color="#7DD3FC"/>
+    </linearGradient>
+
+    <filter id="softShadow" x="-15%" y="-20%" width="130%" height="150%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#000000" flood-opacity="0.48"/>
+      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#00D2FF" flood-opacity="0.14"/>
+    </filter>
+
+    <filter id="orbGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- Deep Space & Nebula Backdrop -->
+  <rect width="1200" height="540" rx="28" fill="url(#bgGrad)"/>
+  <rect width="1200" height="540" rx="28" fill="url(#nebulaCyan)"/>
+  <rect width="1200" height="540" rx="28" fill="url(#nebulaPurple)"/>
+  <rect x="1" y="1" width="1198" height="538" rx="27" fill="none" stroke="url(#fresnelRim)" stroke-opacity="0.28" stroke-width="1.5"/>
+
+  <!-- Subtle Optical Grid Lines -->
+  <g stroke="#FFFFFF" stroke-opacity="0.035" stroke-width="1">
+    <line x1="0" y1="135" x2="1200" y2="135"/>
+    <line x1="0" y1="270" x2="1200" y2="270"/>
+    <line x1="0" y1="405" x2="1200" y2="405"/>
+    <line x1="300" y1="0" x2="300" y2="540"/>
+    <line x1="600" y1="0" x2="600" y2="540"/>
+    <line x1="900" y1="0" x2="900" y2="540"/>
+  </g>
+
+  <!-- Brand Header Section -->
+  <g transform="translate(96, 66)">
+    <!-- Liquid Eclipse Orb App Icon -->
+    <g filter="url(#softShadow)">
+      <rect x="0" y="0" width="96" height="96" rx="23" fill="url(#iconSquircle)" stroke="url(#fresnelRim)" stroke-width="1.5"/>
+      <!-- Outer Optical Ring -->
+      <circle cx="46" cy="48" r="28" fill="#FFFFFF" fill-opacity="0.05" stroke="url(#fresnelRim)" stroke-width="2.2"/>
+      <!-- Glowing Blue Eclipse Core -->
+      <circle cx="46" cy="48" r="14.5" fill="url(#eclipseCore)" filter="url(#orbGlow)"/>
+      <ellipse cx="42" cy="41" rx="6.5" ry="3.2" fill="#FFFFFF" fill-opacity="0.65"/>
+      <!-- Companion Magenta Satellite Dot -->
+      <circle cx="74" cy="33" r="5" fill="#F472B6"/>
+      <circle cx="72.5" cy="31.5" r="1.6" fill="#FFFFFF" fill-opacity="0.85"/>
+    </g>
+
+    <!-- Title & Badges -->
+    <g transform="translate(122, 8)">
+      <rect x="0" y="0" width="256" height="24" rx="12" fill="#00D2FF" fill-opacity="0.14" stroke="#7DD3FC" stroke-opacity="0.45" stroke-width="1"/>
+      <text x="128" y="16" fill="#7DD3FC" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif" font-size="11" font-weight="700" letter-spacing="1.4" text-anchor="middle">DESIGNED FOR macOS 27</text>
+
+      <text x="0" y="64" fill="url(#titleGrad)" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif" font-size="44" font-weight="800" letter-spacing="-0.8">BarLens</text>
+      <text x="184" y="62" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif" font-size="22" font-weight="500">栏镜</text>
+
+      <text x="0" y="92" fill="#CBD5E1" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="16" font-weight="400">
+        Native MenuBarAgent Allow-List Engine &amp; Second-Row Liquid Glass Floating Bar
+      </text>
+    </g>
+  </g>
+
+  <!-- Interactive-Style Mockup of macOS 27 Menu Bar + Liquid Glass Floating Capsule -->
+  <g transform="translate(96, 224)">
+    <!-- Simulated macOS 27 Top Menu Bar -->
+    <g filter="url(#softShadow)">
+      <rect x="0" y="0" width="1008" height="38" rx="12" fill="url(#topMenuBarGrad)" stroke="#FFFFFF" stroke-opacity="0.14" stroke-width="1"/>
+      <!-- Left App Menus -->
+      <circle cx="24" cy="19" r="6" fill="#38BDF8"/>
+      <text x="42" y="24" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="13" font-weight="700">BarLens</text>
+      <text x="112" y="24" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="13" font-weight="500">File</text>
+      <text x="152" y="24" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="13" font-weight="500">Edit</text>
+      <text x="194" y="24" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="13" font-weight="500">View</text>
+      <text x="242" y="24" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="13" font-weight="500">Window</text>
+
+      <!-- Right Status Items + BarLens Eclipse Trigger -->
+      <!-- BarLens Eclipse Trigger (Highlighted) -->
+      <g transform="translate(718, 6)">
+        <rect x="0" y="0" width="38" height="26" rx="8" fill="#38BDF8" fill-opacity="0.22" stroke="#7DD3FC" stroke-opacity="0.65" stroke-width="1"/>
+        <circle cx="19" cy="13" r="6.5" fill="none" stroke="#7DD3FC" stroke-width="1.8"/>
+        <circle cx="19" cy="13" r="2.8" fill="#38BDF8"/>
+      </g>
+
+      <!-- Always-Visible Status Icons -->
+      <g transform="translate(776, 11)" stroke="#F1F5F9" stroke-width="1.7" fill="none" stroke-linecap="round">
+        <!-- Wi-Fi -->
+        <path d="M0,6 C5,1 13,1 18,6"/>
+        <path d="M3,9.5 C6.5,6 11.5,6 15,9.5"/>
+        <circle cx="9" cy="13" r="1.4" fill="#F1F5F9"/>
+      </g>
+      <!-- Battery -->
+      <g transform="translate(814, 12)">
+        <rect x="0" y="1" width="22" height="12" rx="3" fill="none" stroke="#F1F5F9" stroke-width="1.5"/>
+        <rect x="2.5" y="3.5" width="15" height="7" rx="1.5" fill="#4ADE80"/>
+        <rect x="23.5" y="4.5" width="2" height="5" rx="1" fill="#F1F5F9"/>
+      </g>
+      <!-- Control Center Switches -->
+      <g transform="translate(856, 11)">
+        <rect x="0" y="1" width="16" height="6" rx="3" fill="none" stroke="#F1F5F9" stroke-width="1.4"/>
+        <circle cx="12.5" cy="4" r="2" fill="#F1F5F9"/>
+        <rect x="0" y="9" width="16" height="6" rx="3" fill="none" stroke="#F1F5F9" stroke-width="1.4"/>
+        <circle cx="4.5" cy="12" r="2" fill="#F1F5F9"/>
+      </g>
+      <text x="892" y="24" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="13" font-weight="600">Tue 9:41 AM</text>
+    </g>
+
+    <!-- Snug 4pt Gap Connector Glow -->
+    <ellipse cx="737" cy="42" rx="48" ry="4" fill="#38BDF8" fill-opacity="0.45" filter="url(#orbGlow)"/>
+
+    <!-- Second-Row Liquid Glass Floating Lens Capsule -->
+    <g transform="translate(342, 44)" filter="url(#softShadow)">
+      <!-- Main Optical Capsule Body -->
+      <rect x="0" y="0" width="666" height="58" rx="29" fill="url(#glassFill)"/>
+      <!-- Top Caustic Specular Sheen -->
+      <path d="M 28 1.5 L 638 1.5" stroke="#FFFFFF" stroke-opacity="0.72" stroke-width="1.5" stroke-linecap="round"/>
+      <!-- 135° Fresnel Refractive Rim -->
+      <rect x="0.75" y="0.75" width="664.5" height="56.5" rx="28.25" fill="none" stroke="url(#fresnelRim)" stroke-width="1.5"/>
+      <!-- Inner Cushion Depth Ring -->
+      <rect x="2.5" y="2.5" width="661" height="53" rx="26.5" fill="none" stroke="#000000" stroke-opacity="0.28" stroke-width="1"/>
+
+      <!-- Floating Bar App & System Icons -->
+      <!-- App Icon 1: Prism / Editor -->
+      <g transform="translate(16, 10)">
+        <rect x="6" y="6" width="26" height="26" rx="6.5" fill="#F8FAFC"/>
+        <path d="M19,11 L26,27 L19,23 L12,27 Z" fill="#0284C7"/>
+      </g>
+
+      <!-- App Icon 2: AI Assistant -->
+      <g transform="translate(66, 10)">
+        <rect x="6" y="6" width="26" height="26" rx="6.5" fill="#10B981" fill-opacity="0.22" stroke="#34D399" stroke-opacity="0.6" stroke-width="1.2"/>
+        <circle cx="19" cy="19" r="6" fill="none" stroke="#A7F3D0" stroke-width="1.8"/>
+      </g>
+
+      <!-- App Icon 3: Network Monitor (With Multi-Item Badge ×2) -->
+      <g transform="translate(116, 10)">
+        <rect x="6" y="6" width="26" height="26" rx="6.5" fill="#6366F1" fill-opacity="0.25" stroke="#818CF8" stroke-opacity="0.65" stroke-width="1.2"/>
+        <path d="M13,22 L17,15 L21,20 L25,13" fill="none" stroke="#E0E7FF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        <rect x="24" y="22" width="16" height="11" rx="5.5" fill="#3B82F6"/>
+        <text x="32" y="30" fill="#FFFFFF" font-family="-apple-system, sans-serif" font-size="8" font-weight="700" text-anchor="middle">×2</text>
+      </g>
+
+      <!-- Active Platter Icon 4: Focus Mode (Highlighted White Optical Platter) -->
+      <g transform="translate(170, 9)">
+        <circle cx="20" cy="20" r="19" fill="#FFFFFF" fill-opacity="0.94"/>
+        <path d="M22.5,12.5 C18.5,13 15.5,16.5 16,20.8 C16.5,24.5 19.8,27 23.5,26.5 C20.2,28.2 15.8,26.8 14.2,23.2 C12.5,19.5 14.2,15 18,13.2 C19.5,12.5 21,12.3 22.5,12.5 Z" fill="#4F46E5"/>
+      </g>
+
+      <!-- System Icon 5: Sound -->
+      <g transform="translate(224, 10)" stroke="#F8FAFC" stroke-width="1.8" fill="none" stroke-linecap="round">
+        <path d="M12,16 L16,16 L21,12 L21,26 L16,22 L12,22 Z" fill="#F8FAFC" stroke-linejoin="round"/>
+        <path d="M24.5,15.5 C26.5,17.5 26.5,20.5 24.5,22.5"/>
+        <path d="M27.5,13 C31,16.5 31,21.5 27.5,25"/>
+      </g>
+
+      <!-- System Icon 6: Display Brightness -->
+      <g transform="translate(274, 10)" stroke="#F8FAFC" stroke-width="1.8" fill="none" stroke-linecap="round">
+        <circle cx="19" cy="19" r="4.5"/>
+        <line x1="19" y1="10" x2="19" y2="12"/>
+        <line x1="19" y1="26" x2="19" y2="28"/>
+        <line x1="10" y1="19" x2="12" y2="19"/>
+        <line x1="26" y1="19" x2="28" y2="19"/>
+        <line x1="12.8" y1="12.8" x2="14.2" y2="14.2"/>
+        <line x1="23.8" y1="23.8" x2="25.2" y2="25.2"/>
+        <line x1="25.2" y1="12.8" x2="23.8" y2="14.2"/>
+        <line x1="14.2" y1="23.8" x2="12.8" y2="25.2"/>
+      </g>
+
+      <!-- System Icon 7: Time Machine -->
+      <g transform="translate(324, 10)" stroke="#F8FAFC" stroke-width="1.8" fill="none" stroke-linecap="round">
+        <circle cx="19" cy="19" r="7.5"/>
+        <polyline points="19,15 19,19 22.5,21"/>
+      </g>
+
+      <!-- System Icon 8: Weather -->
+      <g transform="translate(374, 10)">
+        <circle cx="16" cy="16" r="4" fill="#FBBF24"/>
+        <path d="M15,24 L24,24 C26.2,24 28,22.2 28,20 C28,18 26.5,16.3 24.5,16 C23.8,13.2 21.2,11.2 18.2,11.2 C14.6,11.2 11.7,14 11.5,17.5 C9.8,17.9 8.5,19.4 8.5,21.2 C8.5,22.8 9.8,24 11.5,24 Z" fill="#E0F2FE"/>
+      </g>
+
+      <!-- System Icon 9: Screen Mirroring -->
+      <g transform="translate(424, 10)" stroke="#F8FAFC" stroke-width="1.7" fill="none">
+        <rect x="10" y="13" width="14" height="10" rx="2"/>
+        <rect x="15" y="16" width="14" height="10" rx="2" fill="#1E293B"/>
+      </g>
+
+      <!-- Optical Separator -->
+      <line x1="478" y1="18" x2="478" y2="40" stroke="#FFFFFF" stroke-opacity="0.22" stroke-width="1"/>
+
+      <!-- Always-Hidden Peek Pill (Purple Liquid Glass) -->
+      <g transform="translate(492, 11)">
+        <rect x="0" y="0" width="92" height="36" rx="18" fill="url(#purplePillGrad)" stroke="#D8B4FE" stroke-opacity="0.65" stroke-width="1.2"/>
+        <!-- Eye.slash icon -->
+        <path d="M24,14 C28,14 31.5,16.5 33,18 C31.5,19.5 28,22 24,22 C20,22 16.5,19.5 15,18 C16.5,16.5 20,14 24,14 Z" fill="none" stroke="#F3E8FF" stroke-width="1.6"/>
+        <line x1="17" y1="23" x2="31" y2="13" stroke="#F3E8FF" stroke-width="1.6" stroke-linecap="round"/>
+        <text x="56" y="23" fill="#F3E8FF" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="13.5" font-weight="700" text-anchor="middle">+4</text>
+      </g>
+
+      <!-- Optical Separator -->
+      <line x1="598" y1="18" x2="598" y2="40" stroke="#FFFFFF" stroke-opacity="0.22" stroke-width="1"/>
+
+      <!-- Settings Gear Button -->
+      <g transform="translate(612, 10)" stroke="#F8FAFC" stroke-width="1.7" fill="none">
+        <circle cx="19" cy="19" r="3.5"/>
+        <circle cx="19" cy="19" r="7.5" stroke-dasharray="3 3"/>
+      </g>
+    </g>
+
+    <!-- Feature Callout Badges Below Floating Bar -->
+    <g transform="translate(0, 142)">
+      <!-- Pill 1 -->
+      <g transform="translate(0, 0)">
+        <rect x="0" y="0" width="238" height="64" rx="16" fill="#FFFFFF" fill-opacity="0.05" stroke="#FFFFFF" stroke-opacity="0.12" stroke-width="1"/>
+        <text x="20" y="27" fill="#38BDF8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="13" font-weight="700">01 · Zero Notch Collision</text>
+        <text x="20" y="47" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="12">Native MenuBarAgent allow-list</text>
+      </g>
+      <!-- Pill 2 -->
+      <g transform="translate(256, 0)">
+        <rect x="0" y="0" width="238" height="64" rx="16" fill="#FFFFFF" fill-opacity="0.05" stroke="#FFFFFF" stroke-opacity="0.12" stroke-width="1"/>
+        <text x="20" y="27" fill="#A855F7" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="13" font-weight="700">02 · 135° Liquid Glass</text>
+        <text x="20" y="47" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="12">4-layer Fresnel optical lens rim</text>
+      </g>
+      <!-- Pill 3 -->
+      <g transform="translate(512, 0)">
+        <rect x="0" y="0" width="238" height="64" rx="16" fill="#FFFFFF" fill-opacity="0.05" stroke="#FFFFFF" stroke-opacity="0.12" stroke-width="1"/>
+        <text x="20" y="27" fill="#34D399" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="13" font-weight="700">03 · All 18 System Items</text>
+        <text x="20" y="47" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="12">Full Control Center &amp; AX proxy</text>
+      </g>
+      <!-- Pill 4 -->
+      <g transform="translate(768, 0)">
+        <rect x="0" y="0" width="240" height="64" rx="16" fill="#FFFFFF" fill-opacity="0.05" stroke="#FFFFFF" stroke-opacity="0.12" stroke-width="1"/>
+        <text x="20" y="27" fill="#F472B6" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="13" font-weight="700">04 · Crash-Safe XPC</text>
+        <text x="20" y="47" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="12">Instant restore on app quit/crash</text>
+      </g>
+    </g>
+  </g>
+</svg>

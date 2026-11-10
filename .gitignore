@@ -1,0 +1,50 @@
+# Swift Package Manager & Xcode
+.build/
+.swiftpm/
+Packages/
+xcuserdata/
+*.xcodeproj
+*.xcworkspace
+DerivedData/
+*.moved-aside
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Build, Iconset & Release Artifacts
+*.app/
+*.dmg
+*.zip
+*.pkg
+*.dSYM/
+*.iconset/
+*.sb-*
+*.log
+
+# Signing Credentials & Certificates (Never commit!)
+*.p12
+*.pfx
+*.pem
+*.key
+*.cer
+*.crt
+*.csr
+*.mobileprovision
+*.provisionprofile
+
+# Editor, IDE & Local Agent Configs
+.vscode/
+.idea/
+.cursor/
+.claude/
+.gemini/
+.agent/
+*.swp
+*~
