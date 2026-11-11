@@ -160,10 +160,10 @@ struct GuideSettingsView: View {
     private var floatingBarSection: some View {
         Section(tr("Liquid Glass 悬浮菜单栏技巧", "Floating Bar Tips & Tricks")) {
             GuideItemRow(
-                symbol: "viewfinder",
+                symbol: "sparkle.magnifyingglass",
                 tone: .cyan,
-                title: tr("零截屏「透镜状态透视」", "Zero-Capture Semantic Lens HUD"),
-                detail: tr("无需屏幕录制权限，直接在悬浮栏下方实时透视隐藏应用的未读计数、代理状态、电量输入法等语义信息", "Reads live unread counts, proxy/sync telemetry, battery, and input source right in the Floating Bar with zero Screen Recording")
+                title: tr("零截屏「光学透视浮窗」与子菜单直达", "Optical Lens Loupe & Submenu Tunneling"),
+                detail: tr("静默保持纯图标胶囊；悬停任意图标即在正下方浮现液态玻璃透视卡，查看未读角标、进程内存/CPU、系统实时遥测（音量滑块、输出设备切换、本机 IP、蓝牙外设电量），并可一键直达子菜单动作", "Stays a pure icon capsule at rest; hover any icon to bloom a Liquid Glass loupe with unread badges, RAM/CPU vitals, interactive system controls, and 1-click AXMenu action tunneling")
             )
             GuideItemRow(
                 symbol: "shield.lefthalf.filled",

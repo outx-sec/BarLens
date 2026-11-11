@@ -237,9 +237,9 @@ struct AppearanceSettingsView: View {
                         }
                     )) {
                         AppearanceRowLabel(
-                            symbol: "viewfinder",
+                            symbol: "sparkle.magnifyingglass",
                             tone: .teal,
-                            title: tr("透镜状态透视", "Semantic Lens HUD"),
+                            title: tr("光学透视浮窗", "Optical Lens Loupe"),
                             isSubItem: true
                         )
                     }
@@ -383,35 +383,54 @@ struct AppearanceSettingsView: View {
     }
 
     private var previewLensReadoutPill: some View {
-        let sampleLabels: [(name: String, state: String)] = [
-            (tr("网络代理", "Proxy"), tr("系统代理: off · TUN: on", "System Proxy: off · TUN: on")),
-            (tr("电源监控", "Power"), tr("86% · 正在充电", "86% · Charging")),
-            (tr("终端守护", "Terminal"), tr("Today: 180M tokens", "Today: 180M tokens")),
+        let sampleLabels: [(name: String, key: String, val: String, mem: String)] = [
+            (tr("网络代理", "Proxy"), tr("TUN 隧道", "TUN"), "ON · NIVA", "74 MB"),
+            (tr("系统声音", "Sound"), tr("外置耳机", "Headphones"), "64%", "CoreAudio"),
+            (tr("AI 守护", "Agent"), tr("今日用量", "Today"), "207M · 1501 req", "109 MB"),
         ]
         let idx = (0..<sampleLabels.count).contains(sampleActiveIndex) ? sampleActiveIndex : 1
         let item = sampleLabels[idx]
         let cyanInk = BarLensPalette.ink(.cyan, in: colorScheme)
+        let pointerShifts: [CGFloat] = [-54, -12, 32]
+        let pointerX = pointerShifts[idx]
 
-        return HStack(spacing: 6) {
-            Image(systemName: "viewfinder")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(cyanInk)
+        return HStack(spacing: 8) {
             Text(item.name)
                 .font(.system(size: 10.5, weight: .semibold))
                 .foregroundStyle(.primary)
-            Text("·")
-                .font(.system(size: 10.5, weight: .bold))
-                .foregroundStyle(.primary.opacity(0.45))
-            Text(item.state)
-                .font(.system(size: 10.5, weight: .medium))
+            Text(item.key)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.primary.opacity(0.62))
+            Text(item.val)
+                .font(.system(size: 10.5, weight: .semibold))
                 .foregroundStyle(cyanInk)
+            Spacer(minLength: 6)
+            Text(item.mem)
+                .font(.system(size: 9.5, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.primary.opacity(0.64))
+                .padding(.horizontal, 5.5)
+                .padding(.vertical, 1.5)
+                .background(colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.05), in: Capsule())
         }
         .padding(.horizontal, 11)
-        .frame(height: 23)
-        .previewCapsuleGlass(cornerRadius: 11.5)
+        .frame(width: 228, height: 28)
+        .previewCapsuleGlass(cornerRadius: 12)
+        .overlay(alignment: .top) {
+            Capsule()
+                .fill(
+                    LinearGradient(
+                        colors: [.clear, .white.opacity(0.85), cyanInk.opacity(0.55), .clear],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .frame(width: 24, height: 1.8)
+                .offset(x: pointerX, y: 0.5)
+        }
         .shadow(
             color: .black.opacity(colorScheme == .dark ? 0.28 : 0.10),
-            radius: 4,
+            radius: 5,
             y: 2
         )
     }

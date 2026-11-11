@@ -11,12 +11,96 @@ private final class FloatingBarPanel: NSPanel {
     }
 }
 
-/// Manages the horizontal Liquid Glass floating menu bar below the status item dot.
+/// Coordinates hover dwell, icon-anchored geometry, and mouse-bridge continuity
+/// between icons in the Floating Bar and the companion Liquid Glass Optical Loupe panel.
+final class LensLoupeCoordinator: ObservableObject {
+    struct ActiveTarget: Equatable {
+        let itemID: String
+        let anchorScreenRect: NSRect
+    }
+
+    @Published private(set) var activeTarget: ActiveTarget?
+    private var pendingShowWork: DispatchWorkItem?
+    private var pendingHideWork: DispatchWorkItem?
+    private var hoveredIconID: String?
+    private var isPointerInsideLoupe = false
+
+    func iconHoverChanged(itemID: String, isHovering: Bool, screenRect: NSRect?, lensEnabled: Bool) {
+        guard lensEnabled else {
+            dismissImmediately()
+            return
+        }
+        if isHovering, let screenRect {
+            hoveredIconID = itemID
+            pendingHideWork?.cancel()
+            pendingHideWork = nil
+            pendingShowWork?.cancel()
+            pendingShowWork = nil
+
+            if activeTarget != nil {
+                // Already open: glide immediately to the newly hovered sibling icon.
+                activeTarget = ActiveTarget(itemID: itemID, anchorScreenRect: screenRect)
+            } else {
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self, self.hoveredIconID == itemID else { return }
+                    self.activeTarget = ActiveTarget(itemID: itemID, anchorScreenRect: screenRect)
+                }
+                pendingShowWork = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.11, execute: work)
+            }
+        } else {
+            if hoveredIconID == itemID {
+                hoveredIconID = nil
+            }
+            pendingShowWork?.cancel()
+            pendingShowWork = nil
+            scheduleDismissIfIdle()
+        }
+    }
+
+    func loupeHoverChanged(_ hovering: Bool, onEngineUpdate: (Bool) -> Void) {
+        isPointerInsideLoupe = hovering
+        onEngineUpdate(hovering)
+        if hovering {
+            pendingHideWork?.cancel()
+            pendingHideWork = nil
+        } else {
+            scheduleDismissIfIdle()
+        }
+    }
+
+    func dismissImmediately() {
+        pendingShowWork?.cancel()
+        pendingShowWork = nil
+        pendingHideWork?.cancel()
+        pendingHideWork = nil
+        hoveredIconID = nil
+        isPointerInsideLoupe = false
+        if activeTarget != nil {
+            activeTarget = nil
+        }
+    }
+
+    private func scheduleDismissIfIdle() {
+        pendingHideWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            guard self.hoveredIconID == nil && !self.isPointerInsideLoupe else { return }
+            self.activeTarget = nil
+        }
+        pendingHideWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.17, execute: work)
+    }
+}
+
+/// Manages the horizontal Liquid Glass floating menu bar and its companion Optical Loupe panel.
 final class FloatingBarController {
     private let engine: DividerEngine
     private let catalog: Catalog
     private let onOpenSettings: () -> Void
+    private let loupeCoordinator = LensLoupeCoordinator()
     private var panel: NSPanel?
+    private var loupePanel: NSPanel?
     private weak var anchorButton: NSStatusBarButton?
     private var cancellables: Set<AnyCancellable> = []
     private var globalClickMonitor: Any?
@@ -34,22 +118,41 @@ final class FloatingBarController {
                 guard let self, self.isShown else { return }
                 DispatchQueue.main.async {
                     self.layoutAndPositionPanel()
+                    self.syncLoupePanel(animated: false)
                 }
             }
             .store(in: &cancellables)
 
-        Publishers.Merge(
+        Publishers.Merge3(
             engine.$lensTelemetryEnabled.map { _ in () },
-            engine.$overflowDemotedBundleIDs.map { _ in () }
+            engine.$overflowDemotedBundleIDs.map { _ in () },
+            engine.$systemTelemetryRevision.map { _ in () }
         )
         .receive(on: DispatchQueue.main)
         .sink { [weak self] _ in
             guard let self, self.isShown else { return }
+            if !self.engine.lensTelemetryEnabled {
+                self.loupeCoordinator.dismissImmediately()
+            }
             DispatchQueue.main.async {
                 self.layoutAndPositionPanel()
+                self.syncLoupePanel(animated: false)
             }
         }
         .store(in: &cancellables)
+
+        loupeCoordinator.$activeTarget
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] target in
+                guard let self else { return }
+                if target == nil || !self.isShown || !self.engine.lensTelemetryEnabled {
+                    self.hideLoupePanel()
+                } else {
+                    self.syncLoupePanel(animated: self.loupePanel?.isVisible == true)
+                }
+            }
+            .store(in: &cancellables)
     }
 
     var isShown: Bool {
@@ -58,6 +161,9 @@ final class FloatingBarController {
 
     var panelScreenFrame: NSRect? {
         guard isShown, let panel else { return nil }
+        if let loupePanel, loupePanel.isVisible {
+            return panel.frame.union(loupePanel.frame)
+        }
         return panel.frame
     }
 
@@ -77,16 +183,20 @@ final class FloatingBarController {
         let panel = ensurePanel()
         let targetAppearance = engine.effectiveNSAppearance
         panel.appearance = targetAppearance
+        loupePanel?.appearance = targetAppearance
         let maxBarWidth = max(260, screen.visibleFrame.width - 32)
         let rootView = FloatingBarView(
             engine: engine,
             catalog: catalog,
+            loupeCoordinator: loupeCoordinator,
             maxBarWidth: maxBarWidth,
             onOpenSettings: { [weak self] in
+                self?.loupeCoordinator.dismissImmediately()
                 self?.onOpenSettings()
             },
             onExpandInline: { [weak self] in
                 guard let self else { return }
+                self.loupeCoordinator.dismissImmediately()
                 let targetReveal = self.engine.reveal == .none ? SectionModel.Reveal.hidden : self.engine.reveal
                 self.engine.setRevealPresentationStyle(.inline)
                 self.engine.setReveal(targetReveal)
@@ -110,6 +220,8 @@ final class FloatingBarController {
             engine.refreshRunningApplications()
             panel.orderFrontRegardless()
             installMonitors(statusButtonWindow: buttonWindow)
+        } else {
+            syncLoupePanel(animated: false)
         }
     }
 
@@ -137,9 +249,104 @@ final class FloatingBarController {
         panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: true)
     }
 
+    private func resolveLoupeItem(for itemID: String) -> FloatingBarItem? {
+        let allItems = FloatingBarItemBuilder.allItems(engine: engine, catalog: catalog)
+        return allItems.first { $0.id == itemID }
+    }
+
+    private func syncLoupePanel(animated: Bool) {
+        guard isShown,
+              engine.lensTelemetryEnabled,
+              let mainPanel = panel,
+              let target = loupeCoordinator.activeTarget,
+              let resolvedItem = resolveLoupeItem(for: target.itemID) else {
+            hideLoupePanel()
+            return
+        }
+
+        let screen = mainPanel.screen
+            ?? NSScreen.screens.first(where: { $0.frame.intersects(mainPanel.frame) })
+            ?? NSScreen.main
+        guard let screen else {
+            hideLoupePanel()
+            return
+        }
+
+        let loupe = ensureLoupePanel()
+        let targetAppearance = engine.effectiveNSAppearance
+        loupe.appearance = targetAppearance
+
+        // Precompute horizontal clamping using the fixed card width (288pt + 28pt shadow/padding = 316pt).
+        let nominalPanelWidth: CGFloat = 316
+        let minX = screen.visibleFrame.minX + 8
+        let maxX = screen.visibleFrame.maxX - nominalPanelWidth - 8
+        let desiredX = target.anchorScreenRect.midX - nominalPanelWidth / 2
+        let clampedX = min(max(desiredX, minX), max(minX, maxX))
+        let pointerOffsetX = min(max(target.anchorScreenRect.midX - (clampedX + nominalPanelWidth / 2), -108), 108)
+
+        let loupeView = FloatingLensLoupeView(
+            item: resolvedItem,
+            pointerOffsetX: pointerOffsetX,
+            engine: engine,
+            coordinator: loupeCoordinator
+        )
+
+        if let hosting = loupe.contentViewController as? NSHostingController<FloatingLensLoupeView> {
+            hosting.rootView = loupeView
+            hosting.view.appearance = targetAppearance
+        } else {
+            let hosting = NSHostingController(rootView: loupeView)
+            hosting.sizingOptions = [.intrinsicContentSize]
+            hosting.view.wantsLayer = true
+            hosting.view.layer?.backgroundColor = NSColor.clear.cgColor
+            hosting.view.appearance = targetAppearance
+            loupe.contentViewController = hosting
+        }
+
+        loupe.contentView?.layoutSubtreeIfNeeded()
+        let fitting = loupe.contentViewController?.view.fittingSize ?? NSSize(width: nominalPanelWidth, height: 140)
+        let width = max(nominalPanelWidth, fitting.width)
+        let height = max(84, fitting.height)
+
+        // Main capsule has 18pt bottom shadow padding; overlapping by 14pt places the Loupe card
+        // a clean 4pt beneath the main capsule while creating a continuous hover bridge!
+        let mainCapsuleBottomY = mainPanel.frame.minY + 18
+        let topY = mainCapsuleBottomY + 4 // includes Loupe's 8pt top hover-bridge padding -> visual gap = 4pt
+        let y = topY - height
+        let targetFrame = NSRect(x: clampedX, y: y, width: width, height: height)
+
+        if animated && loupe.isVisible {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.14
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                loupe.animator().setFrame(targetFrame, display: true)
+            }
+        } else {
+            loupe.setFrame(targetFrame, display: true)
+            if !loupe.isVisible {
+                loupe.alphaValue = 0
+                loupe.orderFrontRegardless()
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.13
+                    context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                    loupe.animator().alphaValue = 1
+                }
+            }
+        }
+    }
+
+    private func hideLoupePanel() {
+        engine.isLensLoupeHovered = false
+        guard let loupePanel, loupePanel.isVisible else { return }
+        loupePanel.orderOut(nil)
+    }
+
     func hide() {
         removeMonitors()
+        loupeCoordinator.dismissImmediately()
         engine.isFloatingBarHovered = false
+        engine.isLensLoupeHovered = false
+        loupePanel?.orderOut(nil)
         panel?.orderOut(nil)
     }
 
@@ -155,12 +362,29 @@ final class FloatingBarController {
         panel.isFloatingPanel = true
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        // Disable WindowServer's rectangular frame shadow so only the SwiftUI
-        // capsule's soft Liquid Glass shadow renders.
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         self.panel = panel
+        return panel
+    }
+
+    private func ensureLoupePanel() -> NSPanel {
+        if let loupePanel { return loupePanel }
+        let panel = FloatingBarPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 316, height: 150),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.level = .statusBar
+        panel.isFloatingPanel = true
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        self.loupePanel = panel
         return panel
     }
 
@@ -179,6 +403,7 @@ final class FloatingBarController {
             if ItemEnumerator.isCurrentMouseInOpenPopupWindow() {
                 return
             }
+            self.loupeCoordinator.dismissImmediately()
             self.engine.noteMonitorDismissedReveal()
             self.engine.setReveal(.none)
         }
@@ -187,17 +412,20 @@ final class FloatingBarController {
         ) { [weak self] event in
             guard let self, self.isShown, !self.engine.isContextMenuOpen, let panel = self.panel else { return event }
             if event.window === panel
+                || event.window === self.loupePanel
                 || event.window === statusButtonWindow
                 || event.window?.title == "BarLens"
                 || event.window?.className.contains("StatusBar") == true {
                 return event
             }
+            self.loupeCoordinator.dismissImmediately()
             self.engine.noteMonitorDismissedReveal()
             self.engine.setReveal(.none)
             return event
         }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
             guard let self, self.isShown, event.keyCode == 53 else { return event }
+            self.loupeCoordinator.dismissImmediately()
             self.engine.setReveal(.none)
             return nil
         }
@@ -212,6 +440,123 @@ final class FloatingBarController {
         keyMonitor = nil
     }
 }
+
+// MARK: - Shared Item Builder
+
+fileprivate struct FloatingBarItem: Identifiable {
+    enum Target {
+        case app(bundleID: String, isClassified: Bool)
+        case system(SystemItem, isClassified: Bool)
+    }
+
+    let id: String
+    let title: String
+    let icon: NSImage?
+    let isTemplateIcon: Bool
+    let symbol: String
+    let badgeCount: Int?
+    let section: SectionModel.Section
+    let telemetry: LensTelemetry
+    let vitals: ProcessVitals?
+    let isSpatialOverflow: Bool
+    let isSpatiallyExempt: Bool
+    let target: Target
+}
+
+private enum FloatingBarItemBuilder {
+    static func effective(_ section: SectionModel.Section, alwaysHiddenEnabled: Bool) -> SectionModel.Section {
+        !alwaysHiddenEnabled && section == .alwaysHidden ? .hidden : section
+    }
+
+    static func tuckedOverflowItems(engine: DividerEngine, catalog: Catalog) -> [FloatingBarItem] {
+        guard !engine.overflowDemotedBundleIDs.isEmpty else { return [] }
+        let useMono = engine.floatingBarIconStyle == .monochrome
+        let overflowApps = catalog.entries
+            .filter {
+                $0.isRunning && $0.itemCount > 0
+                    && engine.overflowDemotedBundleIDs.contains($0.bundleID)
+                    && engine.model.section(of: $0.bundleID) == .visible
+            }
+            .map { entry in
+                let icon = useMono ? (entry.monochromeIcon ?? entry.icon) : entry.icon
+                let isTemplate = useMono && entry.monochromeIcon != nil
+                return FloatingBarItem(
+                    id: "app:\(entry.bundleID)",
+                    title: entry.displayName,
+                    icon: icon,
+                    isTemplateIcon: isTemplate,
+                    symbol: "app",
+                    badgeCount: entry.itemCount > 1 ? entry.itemCount : nil,
+                    section: .visible,
+                    telemetry: engine.lensTelemetryEnabled ? entry.telemetry : .empty,
+                    vitals: engine.lensTelemetryEnabled ? entry.vitals : nil,
+                    isSpatialOverflow: true,
+                    isSpatiallyExempt: engine.isSpatiallyExempt(entry.bundleID),
+                    target: .app(bundleID: entry.bundleID, isClassified: entry.isClassified)
+                )
+            }
+        return engine.floatingBarOrder.sorted(overflowApps, id: \.id)
+    }
+
+    static func items(in section: SectionModel.Section, engine: DividerEngine, catalog: Catalog) -> [FloatingBarItem] {
+        let useMono = engine.floatingBarIconStyle == .monochrome
+        let appItems = catalog.entries
+            .filter {
+                $0.isRunning && $0.itemCount > 0
+                    && effective(engine.model.section(of: $0.bundleID), alwaysHiddenEnabled: engine.alwaysHiddenEnabled) == section
+            }
+            .map { entry in
+                let icon = useMono ? (entry.monochromeIcon ?? entry.icon) : entry.icon
+                let isTemplate = useMono && entry.monochromeIcon != nil
+                return FloatingBarItem(
+                    id: "app:\(entry.bundleID)",
+                    title: entry.displayName,
+                    icon: icon,
+                    isTemplateIcon: isTemplate,
+                    symbol: "app",
+                    badgeCount: entry.itemCount > 1 ? entry.itemCount : nil,
+                    section: section,
+                    telemetry: engine.lensTelemetryEnabled ? entry.telemetry : .empty,
+                    vitals: engine.lensTelemetryEnabled ? entry.vitals : nil,
+                    isSpatialOverflow: false,
+                    isSpatiallyExempt: engine.isSpatiallyExempt(entry.bundleID),
+                    target: .app(bundleID: entry.bundleID, isClassified: entry.isClassified)
+                )
+            }
+        let sysItems = engine.activeSystemItems
+            .filter {
+                effective(engine.systemItems.section(of: $0), alwaysHiddenEnabled: engine.alwaysHiddenEnabled) == section
+            }
+            .map { sys in
+                FloatingBarItem(
+                    id: "sys:\(sys.identifier)",
+                    title: sys.title,
+                    icon: nil,
+                    isTemplateIcon: false,
+                    symbol: sys.symbol,
+                    badgeCount: nil,
+                    section: section,
+                    telemetry: engine.telemetry(for: sys),
+                    vitals: nil,
+                    isSpatialOverflow: false,
+                    isSpatiallyExempt: false,
+                    target: .system(sys, isClassified: engine.systemItems.isClassified(sys))
+                )
+            }
+        return engine.floatingBarOrder.sorted(appItems + sysItems, id: \.id)
+    }
+
+    static func allItems(engine: DividerEngine, catalog: Catalog) -> [FloatingBarItem] {
+        var out = tuckedOverflowItems(engine: engine, catalog: catalog)
+            + items(in: .hidden, engine: engine, catalog: catalog)
+        if engine.alwaysHiddenEnabled && engine.reveal == .all {
+            out += items(in: .alwaysHidden, engine: engine, catalog: catalog)
+        }
+        return out
+    }
+}
+
+// MARK: - Drag Reordering State
 
 private struct ActiveFloatingBarDrag: Equatable {
     let itemID: String
@@ -249,9 +594,12 @@ private struct ActiveFloatingBarDrag: Equatable {
     }
 }
 
+// MARK: - Main Single-Capsule Floating Bar View
+
 struct FloatingBarView: View {
     @ObservedObject var engine: DividerEngine
     @ObservedObject var catalog: Catalog
+    @ObservedObject var loupeCoordinator: LensLoupeCoordinator
     let maxBarWidth: CGFloat
     let onOpenSettings: () -> Void
     let onExpandInline: () -> Void
@@ -260,52 +608,18 @@ struct FloatingBarView: View {
     @State private var activeDragTranslationX: CGFloat = 0
     @State private var settleItemID: String?
     @State private var settleOffsetX: CGFloat = 0
-    @State private var hoveredItemID: String?
 
     private var tuckedOverflowItems: [FloatingBarItem] {
-        guard !engine.overflowDemotedBundleIDs.isEmpty else { return [] }
-        let useMono = engine.floatingBarIconStyle == .monochrome
-        let overflowApps = catalog.entries
-            .filter {
-                $0.isRunning && $0.itemCount > 0
-                    && engine.overflowDemotedBundleIDs.contains($0.bundleID)
-                    && engine.model.section(of: $0.bundleID) == .visible
-            }
-            .map { entry in
-                let icon = useMono ? (entry.monochromeIcon ?? entry.icon) : entry.icon
-                let isTemplate = useMono && entry.monochromeIcon != nil
-                return FloatingBarItem(
-                    id: "app:\(entry.bundleID)",
-                    title: entry.displayName,
-                    icon: icon,
-                    isTemplateIcon: isTemplate,
-                    symbol: "app",
-                    badgeCount: entry.itemCount > 1 ? entry.itemCount : nil,
-                    section: .visible,
-                    telemetry: engine.lensTelemetryEnabled ? entry.telemetry : .empty,
-                    isSpatialOverflow: true,
-                    isSpatiallyExempt: engine.isSpatiallyExempt(entry.bundleID),
-                    target: .app(bundleID: entry.bundleID, isClassified: entry.isClassified)
-                )
-            }
-        return engine.floatingBarOrder.sorted(overflowApps, id: \.id)
+        FloatingBarItemBuilder.tuckedOverflowItems(engine: engine, catalog: catalog)
     }
 
     private var hiddenItems: [FloatingBarItem] {
-        items(in: .hidden)
+        FloatingBarItemBuilder.items(in: .hidden, engine: engine, catalog: catalog)
     }
 
     private var alwaysHiddenItems: [FloatingBarItem] {
         guard engine.alwaysHiddenEnabled else { return [] }
-        return items(in: .alwaysHidden)
-    }
-
-    private var allVisibleLensItems: [FloatingBarItem] {
-        var result = tuckedOverflowItems + hiddenItems
-        if engine.reveal == .all {
-            result += alwaysHiddenItems
-        }
-        return result
+        return FloatingBarItemBuilder.items(in: .alwaysHidden, engine: engine, catalog: catalog)
     }
 
     private var hasDisplayedItems: Bool {
@@ -314,86 +628,18 @@ struct FloatingBarView: View {
             || (engine.reveal == .all && !alwaysHiddenItems.isEmpty)
     }
 
-    private var showLensReadout: Bool {
-        engine.lensTelemetryEnabled && (hasDisplayedItems || (engine.alwaysHiddenEnabled && !alwaysHiddenItems.isEmpty))
-    }
-
-    private func effective(_ section: SectionModel.Section) -> SectionModel.Section {
-        !engine.alwaysHiddenEnabled && section == .alwaysHidden ? .hidden : section
-    }
-
-    private func items(in section: SectionModel.Section) -> [FloatingBarItem] {
-        let useMono = engine.floatingBarIconStyle == .monochrome
-        let appItems = catalog.entries
-            .filter { $0.isRunning && $0.itemCount > 0 && effective(engine.model.section(of: $0.bundleID)) == section }
-            .map { entry in
-                let icon = useMono ? (entry.monochromeIcon ?? entry.icon) : entry.icon
-                let isTemplate = useMono && entry.monochromeIcon != nil
-                return FloatingBarItem(
-                    id: "app:\(entry.bundleID)",
-                    title: entry.displayName,
-                    icon: icon,
-                    isTemplateIcon: isTemplate,
-                    symbol: "app",
-                    badgeCount: entry.itemCount > 1 ? entry.itemCount : nil,
-                    section: section,
-                    telemetry: engine.lensTelemetryEnabled ? entry.telemetry : .empty,
-                    isSpatialOverflow: false,
-                    isSpatiallyExempt: engine.isSpatiallyExempt(entry.bundleID),
-                    target: .app(bundleID: entry.bundleID, isClassified: entry.isClassified)
-                )
-            }
-        let sysItems = engine.activeSystemItems
-            .filter { effective(engine.systemItems.section(of: $0)) == section }
-            .map { sys in
-                FloatingBarItem(
-                    id: "sys:\(sys.identifier)",
-                    title: sys.title,
-                    icon: nil,
-                    isTemplateIcon: false,
-                    symbol: sys.symbol,
-                    badgeCount: nil,
-                    section: section,
-                    telemetry: engine.telemetry(for: sys),
-                    isSpatialOverflow: false,
-                    isSpatiallyExempt: false,
-                    target: .system(sys, isClassified: engine.systemItems.isClassified(sys))
-                )
-            }
-        return engine.floatingBarOrder.sorted(appItems + sysItems, id: \.id)
-    }
-
     private var colorScheme: ColorScheme { engine.effectiveColorScheme }
 
     var body: some View {
-        VStack(spacing: 5) {
-            barContent
-                .frame(minWidth: showLensReadout ? 286 : nil)
-
-            if showLensReadout {
-                Color.clear
-                    .frame(height: 26)
-                    .overlay {
-                        FloatingLensReadoutBar(
-                            items: allVisibleLensItems,
-                            hoveredItemID: hoveredItemID,
-                            tuckedCount: tuckedOverflowItems.count,
-                            engine: engine
-                        )
-                    }
+        barContent
+            .padding(.top, 5)
+            .padding(.horizontal, 18)
+            .padding(.bottom, 18)
+            .environment(\.colorScheme, engine.effectiveColorScheme)
+            .preferredColorScheme(engine.effectiveColorScheme)
+            .onHover { hovering in
+                engine.isFloatingBarHovered = hovering
             }
-        }
-        .padding(.top, 5)
-        .padding(.horizontal, 18)
-        .padding(.bottom, 18)
-        .environment(\.colorScheme, engine.effectiveColorScheme)
-        .preferredColorScheme(engine.effectiveColorScheme)
-        .onHover { hovering in
-            engine.isFloatingBarHovered = hovering
-            if !hovering {
-                hoveredItemID = nil
-            }
-        }
     }
 
     private var barContent: some View {
@@ -424,7 +670,7 @@ struct FloatingBarView: View {
                                     itemIndex: tuckedIndexByID[item.id] ?? 0,
                                     siblingIDs: tuckedIDs,
                                     engine: engine,
-                                    hoveredItemID: $hoveredItemID,
+                                    loupeCoordinator: loupeCoordinator,
                                     activeDrag: $activeDrag,
                                     activeDragTranslationX: $activeDragTranslationX,
                                     settleItemID: $settleItemID,
@@ -444,7 +690,7 @@ struct FloatingBarView: View {
                                 itemIndex: hiddenIndexByID[item.id] ?? 0,
                                 siblingIDs: hiddenIDs,
                                 engine: engine,
-                                hoveredItemID: $hoveredItemID,
+                                loupeCoordinator: loupeCoordinator,
                                 activeDrag: $activeDrag,
                                 activeDragTranslationX: $activeDragTranslationX,
                                 settleItemID: $settleItemID,
@@ -464,7 +710,7 @@ struct FloatingBarView: View {
                                     itemIndex: alwaysIndexByID[item.id] ?? 0,
                                     siblingIDs: alwaysIDs,
                                     engine: engine,
-                                    hoveredItemID: $hoveredItemID,
+                                    loupeCoordinator: loupeCoordinator,
                                     activeDrag: $activeDrag,
                                     activeDragTranslationX: $activeDragTranslationX,
                                     settleItemID: $settleItemID,
@@ -484,6 +730,7 @@ struct FloatingBarView: View {
                 FloatingBarSeparator()
 
                 Button {
+                    loupeCoordinator.dismissImmediately()
                     engine.setReveal(engine.reveal == .all ? .hidden : .all)
                 } label: {
                     HStack(spacing: 5) {
@@ -512,6 +759,7 @@ struct FloatingBarView: View {
 
             FloatingBarGearButton(
                 engine: engine,
+                loupeCoordinator: loupeCoordinator,
                 onOpenSettings: onOpenSettings,
                 onExpandInline: onExpandInline
             )
@@ -520,8 +768,6 @@ struct FloatingBarView: View {
         .padding(.vertical, 4)
         .settingsGlass(cornerRadius: 26)
         .background {
-            // Cast soft capsule shadow strictly from a pure SwiftUI shape so
-            // AppKit's NSViewRepresentable never casts a rectangular bounds shadow.
             RoundedRectangle(cornerRadius: 26, style: .continuous)
                 .fill(Color.black.opacity(0.001))
                 .shadow(color: .black.opacity(colorScheme == .dark ? 0.34 : 0.13), radius: 7, y: 3)
@@ -551,42 +797,69 @@ private struct FloatingBarSeparator: View {
     }
 }
 
-private struct FloatingBarItem: Identifiable {
-    enum Target {
-        case app(bundleID: String, isClassified: Bool)
-        case system(SystemItem, isClassified: Bool)
-    }
+// MARK: - Unified Liquid Glass Optical Loupe Card
 
-    let id: String
-    let title: String
-    let icon: NSImage?
-    let isTemplateIcon: Bool
-    let symbol: String
-    let badgeCount: Int?
-    let section: SectionModel.Section
-    let telemetry: LensTelemetry
-    let isSpatialOverflow: Bool
-    let isSpatiallyExempt: Bool
-    let target: Target
-}
-
-private struct FloatingLensReadoutBar: View {
-    let items: [FloatingBarItem]
-    let hoveredItemID: String?
-    let tuckedCount: Int
+private struct FloatingLensLoupeView: View {
+    let item: FloatingBarItem
+    let pointerOffsetX: CGFloat
     @ObservedObject var engine: DividerEngine
-    @Environment(\.colorScheme) private var colorScheme
+    @ObservedObject var coordinator: LensLoupeCoordinator
+    @State private var copiedIPFeedback = false
 
-    private var hoveredItem: FloatingBarItem? {
-        guard let hoveredItemID else { return nil }
-        return items.first { $0.id == hoveredItemID }
+    private var colorScheme: ColorScheme { engine.effectiveColorScheme }
+
+    private var displayRows: [LensFactRow] {
+        if !item.telemetry.rows.isEmpty {
+            return item.telemetry.rows
+        }
+        // Universal fallback rows for apps that publish neither AXHelp nor AXMenu status lines,
+        // ensuring every hovered app in the Floating Bar displays rich live process telemetry.
+        if let vitals = item.vitals {
+            var rows: [LensFactRow] = [
+                LensFactRow(
+                    label: tr("内存占用", "Memory"),
+                    value: vitals.formattedMemory,
+                    tone: vitals.isHighMemory ? .warning : .accent
+                ),
+                LensFactRow(
+                    label: tr("CPU 活跃", "CPU"),
+                    value: vitals.formattedCPU,
+                    tone: vitals.isHighCPU ? .warning : .neutral
+                ),
+            ]
+            if let multi = item.badgeCount, multi > 1 {
+                rows.append(LensFactRow(
+                    label: tr("顶栏图标", "Status Items"),
+                    value: tr("\(multi) 个关联项", "\(multi) items"),
+                    tone: .neutral
+                ))
+            } else {
+                rows.append(LensFactRow(
+                    label: tr("运行状态", "State"),
+                    value: tr("后台常驻就绪", "Running in menu bar"),
+                    tone: .active
+                ))
+            }
+            return rows
+        }
+        return []
     }
 
-    private var activeSignalItems: [FloatingBarItem] {
-        items.filter { $0.telemetry.hasLiveSignal }
+    private func inkColor(for tone: LensFactRow.ValueTone) -> Color {
+        switch tone {
+        case .neutral:
+            return .primary.opacity(0.84)
+        case .active:
+            return BarLensPalette.ink(.green, in: colorScheme)
+        case .accent:
+            return BarLensPalette.ink(.cyan, in: colorScheme)
+        case .warning:
+            return BarLensPalette.ink(.orange, in: colorScheme)
+        }
     }
 
-    private func trigger(_ item: FloatingBarItem) {
+    private func triggerNativeMenu() {
+        coordinator.dismissImmediately()
         switch item.target {
         case .app(let bundleID, _):
             engine.activateFromFloatingBar(bundleID: bundleID)
@@ -596,145 +869,567 @@ private struct FloatingLensReadoutBar: View {
     }
 
     var body: some View {
-        let cyanInk = BarLensPalette.ink(.cyan, in: colorScheme)
-        let tealInk = BarLensPalette.ink(.teal, in: colorScheme)
-        let purpleInk = BarLensPalette.ink(.purple, in: colorScheme)
+        VStack(alignment: .leading, spacing: 9) {
+            headerSection
 
-        HStack(spacing: 7) {
-            if let item = hoveredItem {
-                let badgeTone: SemanticTone = item.isSpatialOverflow
-                    ? .teal
-                    : (item.section == .alwaysHidden ? .purple : .cyan)
-                let badgeInk = BarLensPalette.ink(badgeTone, in: colorScheme)
+            if let control = item.telemetry.interactiveControl {
+                interactiveControlSection(control)
+            }
 
-                Circle()
-                    .fill(badgeInk)
-                    .frame(width: 5.5, height: 5.5)
+            if !displayRows.isEmpty {
+                factRowsSection(displayRows)
+            }
 
-                Text(item.title)
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .layoutPriority(2)
+            if case .app(let bundleID, _) = item.target, !item.telemetry.tunnelActions.isEmpty {
+                tunnelActionsSection(bundleID: bundleID, actions: item.telemetry.tunnelActions)
+            }
 
-                if item.isSpatialOverflow {
-                    Text(tr("容量暂收", "Overflow"))
-                        .font(.system(size: 9.5, weight: .semibold))
-                        .foregroundStyle(tealInk)
-                        .padding(.horizontal, 5.5)
-                        .padding(.vertical, 1.5)
-                        .background(BarLensPalette.badgeFill(.teal, in: colorScheme), in: Capsule())
-                        .fixedSize()
-                } else if item.section == .alwaysHidden {
-                    Text(tr("永久隐藏", "Always Hidden"))
-                        .font(.system(size: 9.5, weight: .semibold))
-                        .foregroundStyle(purpleInk)
-                        .padding(.horizontal, 5.5)
-                        .padding(.vertical, 1.5)
-                        .background(BarLensPalette.badgeFill(.purple, in: colorScheme), in: Capsule())
-                        .fixedSize()
-                }
+            Divider()
+                .opacity(colorScheme == .dark ? 0.45 : 0.35)
 
-                Text("·")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.primary.opacity(0.45))
+            footerQuickBar
+        }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 11)
+        .frame(width: 288)
+        .settingsGlass(cornerRadius: 18)
+        .overlay(alignment: .top) {
+            // Subtle refractive specular beam aligned right underneath the hovered icon.
+            Capsule()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.0),
+                            Color.white.opacity(colorScheme == .dark ? 0.72 : 0.95),
+                            BarLensPalette.ink(.cyan, in: colorScheme).opacity(0.55),
+                            Color.white.opacity(0.0),
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .frame(width: 30, height: 2)
+                .offset(x: pointerOffsetX, y: 0.5)
+                .allowsHitTesting(false)
+        }
+        .background {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.black.opacity(0.001))
+                .shadow(color: .black.opacity(colorScheme == .dark ? 0.36 : 0.14), radius: 9, y: 4)
+                .shadow(color: .black.opacity(colorScheme == .dark ? 0.18 : 0.06), radius: 2.5, y: 1)
+        }
+        // Top 8pt padding acts as a seamless hover bridge right below the Floating Bar capsule.
+        .padding(.top, 8)
+        .padding(.horizontal, 14)
+        .padding(.bottom, 16)
+        .contentShape(Rectangle())
+        .environment(\.colorScheme, colorScheme)
+        .preferredColorScheme(colorScheme)
+        .onHover { hovering in
+            coordinator.loupeHoverChanged(hovering) { isInside in
+                engine.isLensLoupeHovered = isInside
+            }
+        }
+    }
 
-                if let summary = item.telemetry.fullSummary {
-                    Text(summary)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(cyanInk)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+    // MARK: Header
+
+    private var headerSection: some View {
+        HStack(spacing: 8) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 6.5, style: .continuous)
+                    .fill(colorScheme == .dark ? Color.white.opacity(0.10) : Color.black.opacity(0.055))
+                    .frame(width: 24, height: 24)
+                if let icon = item.icon {
+                    if item.isTemplateIcon {
+                        Image(nsImage: icon)
+                            .renderingMode(.template)
+                            .resizable()
+                            .interpolation(.high)
+                            .foregroundStyle(.primary.opacity(0.92))
+                            .frame(width: 15, height: 15)
+                    } else {
+                        Image(nsImage: icon)
+                            .resizable()
+                            .interpolation(.high)
+                            .frame(width: 17, height: 17)
+                    }
                 } else {
-                    Text(item.isSpatialOverflow
-                         ? tr("点按打开菜单 · 右键可锁定顶栏常驻", "Click: Menu · Right-click: Pin to Top Bar")
-                         : tr("点按打开菜单 · 按住拖拽排序", "Click: Menu · Hold & drag: Reorder"))
-                        .font(.system(size: 11, weight: .regular))
-                        .foregroundStyle(.primary.opacity(0.76))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    Image(systemName: item.symbol)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(BarLensPalette.ink(.cyan, in: colorScheme))
+                }
+            }
+
+            Text(item.title)
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+
+            if let unread = item.telemetry.unreadBadge {
+                Text(tr("未读 \(unread)", "\(unread) Unread"))
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1.5)
+                    .background(Color(red: 0.90, green: 0.25, blue: 0.24), in: Capsule())
+            } else if item.isSpatialOverflow {
+                Text(tr("容量暂收", "Tucked"))
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(BarLensPalette.ink(.teal, in: colorScheme))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1.5)
+                    .background(BarLensPalette.badgeFill(.teal, in: colorScheme), in: Capsule())
+            }
+
+            Spacer(minLength: 4)
+
+            if let vitals = item.vitals {
+                let warn = vitals.isHighMemory || vitals.isHighCPU
+                Text(vitals.compactSummary)
+                    .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(
+                        warn
+                            ? BarLensPalette.ink(.orange, in: colorScheme)
+                            : .primary.opacity(0.68)
+                    )
+                    .padding(.horizontal, 6.5)
+                    .padding(.vertical, 2)
+                    .background(
+                        warn
+                            ? BarLensPalette.badgeFill(.orange, in: colorScheme)
+                            : (colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.05)),
+                        in: Capsule()
+                    )
+            } else if let chip = item.telemetry.shortChip {
+                Text(chip)
+                    .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(BarLensPalette.ink(.cyan, in: colorScheme))
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    // MARK: Structured Fact Rows
+
+    private func factRowsSection(_ rows: [LensFactRow]) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            ForEach(rows) { row in
+                if let label = row.label, !label.isEmpty {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(label)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.primary.opacity(0.66))
+                            .lineLimit(1)
+                        Spacer(minLength: 6)
+                        Text(row.value)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(inkColor(for: row.tone))
+                            .multilineTextAlignment(.trailing)
+                            .lineLimit(2)
+                    }
+                } else {
+                    HStack(alignment: .top, spacing: 6) {
+                        Circle()
+                            .fill(inkColor(for: row.tone))
+                            .frame(width: 5, height: 5)
+                            .padding(.top, 5)
+                        Text(row.value)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(row.tone == .neutral ? .primary.opacity(0.84) : inkColor(for: row.tone))
+                            .fixedSize(horizontal: false, vertical: true)
+                            .lineLimit(3)
+                        Spacer(minLength: 0)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(colorScheme == .dark ? Color.white.opacity(0.055) : Color.black.opacity(0.038))
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(
+                    colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.05),
+                    lineWidth: 0.65
+                )
+        }
+    }
+
+    // MARK: Interactive System Controls
+
+    @ViewBuilder
+    private func interactiveControlSection(_ control: LensInteractiveControl) -> some View {
+        switch control {
+        case .audioOutput(let volume, let isMuted, _, let devices):
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 8) {
+                    Button {
+                        SystemTelemetryReader.shared.toggleOutputMute()
+                        engine.bumpSystemTelemetry()
+                    } label: {
+                        Image(systemName: isMuted ? "speaker.slash.fill" : (volume > 0.5 ? "speaker.wave.2.fill" : "speaker.wave.1.fill"))
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(isMuted ? BarLensPalette.ink(.orange, in: colorScheme) : BarLensPalette.ink(.cyan, in: colorScheme))
+                            .frame(width: 26, height: 24)
+                            .background(
+                                colorScheme == .dark ? Color.white.opacity(0.10) : Color.black.opacity(0.06),
+                                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            )
+                    }
+                    .buttonStyle(.plain)
+
+                    LiquidGlassVolumeBar(volume: isMuted ? 0 : volume) { newVol in
+                        SystemTelemetryReader.shared.setOutputVolume(newVol)
+                        engine.bumpSystemTelemetry()
+                    }
+
+                    Text(isMuted ? tr("静音", "Mute") : "\(Int((volume * 100).rounded()))%")
+                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.primary.opacity(0.86))
+                        .frame(width: 34, alignment: .trailing)
                 }
 
-                Spacer(minLength: 0)
-            } else if !activeSignalItems.isEmpty {
-                Image(systemName: "viewfinder")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(cyanInk)
-
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(activeSignalItems.prefix(4)) { item in
-                            Button {
-                                trigger(item)
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Text(item.title)
-                                        .font(.system(size: 10.5, weight: .semibold))
-                                        .foregroundStyle(.primary)
-                                    if let badge = item.telemetry.unreadBadge {
-                                        Text(badge)
-                                            .font(.system(size: 10, weight: .bold, design: .rounded))
-                                            .monospacedDigit()
-                                            .foregroundStyle(BarLensPalette.ink(.orange, in: colorScheme))
-                                    } else if let chip = item.telemetry.shortChip {
-                                        Text(chip)
-                                            .font(.system(size: 10.5, weight: .medium))
-                                            .foregroundStyle(cyanInk)
-                                            .lineLimit(1)
-                                    }
-                                }
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 2.5)
-                                .background(
-                                    colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.055),
-                                    in: Capsule()
-                                )
+                if devices.count > 1 {
+                    VStack(alignment: .leading, spacing: 3.5) {
+                        ForEach(devices) { dev in
+                            LoupeActionRowButton(
+                                icon: dev.isCurrent ? "checkmark.circle.fill" : "hifispeaker",
+                                title: dev.name,
+                                trailing: dev.isCurrent ? tr("当前", "Active") : nil,
+                                isHighlighted: dev.isCurrent
+                            ) {
+                                SystemTelemetryReader.shared.selectOutputDevice(dev.id)
+                                engine.bumpSystemTelemetry()
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                 }
-                Spacer(minLength: 0)
-            } else if tuckedCount > 0 {
-                Image(systemName: "shield.lefthalf.filled")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(tealInk)
-                Text(tr("已暂收 \(tuckedCount) 项防顶栏拥挤 · 悬停图标查看详情",
-                        "\(tuckedCount) tucked to prevent bar overflow · Hover to inspect"))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.primary.opacity(0.84))
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-            } else {
-                Image(systemName: "viewfinder")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(cyanInk)
-                Text(tr("透镜就绪 · 悬停透视实时状态 · 拖拽排序",
-                        "Lens Ready · Hover to inspect live state · Drag to reorder"))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.primary.opacity(0.78))
-                    .lineLimit(1)
+            }
+
+        case .inputSources(let sources):
+            HStack(spacing: 5) {
+                ForEach(sources) { src in
+                    LoupeChipButton(
+                        title: src.name,
+                        icon: src.isCurrent ? "checkmark" : nil,
+                        isSelected: src.isCurrent
+                    ) {
+                        SystemTelemetryReader.shared.selectInputSource(id: src.id)
+                        engine.bumpSystemTelemetry()
+                    }
+                }
+            }
+
+        case .networkInfo(let localIPv4, _, _):
+            if let ip = localIPv4, !ip.isEmpty {
+                HStack(spacing: 6) {
+                    LoupeChipButton(
+                        title: copiedIPFeedback ? tr("已复制 \(ip)", "Copied \(ip)") : tr("复制本机 IP", "Copy Local IP"),
+                        icon: copiedIPFeedback ? "checkmark" : "doc.on.doc",
+                        isSelected: copiedIPFeedback
+                    ) {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(ip, forType: .string)
+                        copiedIPFeedback = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+                            copiedIPFeedback = false
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+
+        case .stageManager(let isEnabled):
+            HStack(spacing: 6) {
+                LoupeChipButton(
+                    title: isEnabled ? tr("关闭台前调度", "Turn Off Stage Manager") : tr("开启台前调度", "Turn On Stage Manager"),
+                    icon: "squares.leading.rectangle",
+                    isSelected: isEnabled
+                ) {
+                    SystemTelemetryReader.shared.toggleStageManager()
+                    engine.bumpSystemTelemetry()
+                }
                 Spacer(minLength: 0)
             }
         }
-        .padding(.horizontal, 11)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .settingsGlass(cornerRadius: 13)
-        .background {
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .fill(Color.black.opacity(0.001))
-                .shadow(color: .black.opacity(colorScheme == .dark ? 0.24 : 0.08), radius: 4, y: 2)
+    }
+
+    // MARK: Submenu Action Tunneling
+
+    private func tunnelActionsSection(bundleID: String, actions: [LensTunnelAction]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(tr("子菜单直达", "Quick Menu Actions"))
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.primary.opacity(0.56))
+                .padding(.leading, 2)
+
+            VStack(alignment: .leading, spacing: 3.5) {
+                ForEach(actions.prefix(4)) { action in
+                    LoupeActionRowButton(
+                        icon: action.isChecked ? "checkmark.circle.fill" : "bolt.fill",
+                        title: action.title,
+                        trailing: action.shortcutHint,
+                        isHighlighted: action.isChecked
+                    ) {
+                        coordinator.dismissImmediately()
+                        engine.performTunnelAction(action, bundleID: bundleID)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: Bottom Utility Bar
+
+    private var footerQuickBar: some View {
+        HStack(spacing: 6) {
+            switch item.target {
+            case .app(let bundleID, _):
+                LoupeUtilityButton(icon: "menubar.arrow.down.rectangle", label: tr("菜单", "Menu")) {
+                    triggerNativeMenu()
+                }
+                LoupeUtilityButton(icon: "macwindow", label: tr("唤醒", "Open")) {
+                    coordinator.dismissImmediately()
+                    engine.activateApplicationWindow(bundleID: bundleID)
+                }
+                if item.section == .visible && engine.spatialBudgetPolicy != .off {
+                    let pinned = engine.isSpatiallyExempt(bundleID)
+                    LoupeUtilityButton(
+                        icon: pinned ? "pin.slash" : "pin.fill",
+                        label: pinned ? tr("解锁", "Unpin") : tr("常驻", "Pin")
+                    ) {
+                        engine.toggleSpatialExemption(for: bundleID)
+                    }
+                }
+                Spacer(minLength: 4)
+                LoupeUtilityButton(icon: "power", label: tr("退出", "Quit"), isDestructive: true) {
+                    coordinator.dismissImmediately()
+                    engine.quitApplication(bundleID: bundleID)
+                }
+
+            case .system(let sysItem, _):
+                LoupeUtilityButton(icon: "menubar.arrow.down.rectangle", label: tr("打开面板", "Open Panel")) {
+                    triggerNativeMenu()
+                }
+                if let url = SystemTelemetryReader.systemSettingsURL(for: sysItem.identifier) {
+                    LoupeUtilityButton(icon: "slider.horizontal.3", label: tr("系统设置", "Settings")) {
+                        coordinator.dismissImmediately()
+                        engine.setReveal(.none)
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
         }
     }
 }
 
+// MARK: - Optical Loupe Interactive Subcomponents
+
+private struct LiquidGlassVolumeBar: View {
+    let volume: Double
+    let onChange: (Double) -> Void
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = max(1, geo.size.width)
+            let clamped = min(max(volume, 0), 1)
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(colorScheme == .dark ? Color.white.opacity(0.14) : Color.black.opacity(0.09))
+                    .frame(height: 8)
+
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                BarLensPalette.ink(.cyan, in: colorScheme).opacity(0.85),
+                                BarLensPalette.ink(.teal, in: colorScheme),
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: max(8, w * clamped), height: 8)
+
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: 13, height: 13)
+                    .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+                    .offset(x: min(max(0, w * clamped - 6.5), w - 13))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let next = min(max(0, Double(value.location.x / w)), 1)
+                        onChange(next)
+                    }
+            )
+        }
+        .frame(height: 20)
+    }
+}
+
+private struct LoupeActionRowButton: View {
+    let icon: String
+    let title: String
+    let trailing: String?
+    var isHighlighted: Bool = false
+    let action: () -> Void
+    @State private var hovered = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                Image(systemName: icon)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(
+                        isHighlighted || hovered
+                            ? BarLensPalette.ink(.cyan, in: colorScheme)
+                            : .primary.opacity(0.65)
+                    )
+                    .frame(width: 13)
+
+                Text(title)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(.primary.opacity(0.92))
+                    .lineLimit(1)
+
+                Spacer(minLength: 4)
+
+                if let trailing, !trailing.isEmpty {
+                    Text(trailing)
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .foregroundStyle(.primary.opacity(0.55))
+                } else {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.primary.opacity(hovered ? 0.65 : 0.30))
+                }
+            }
+            .padding(.horizontal, 8.5)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(
+                        hovered
+                            ? (colorScheme == .dark ? Color.white.opacity(0.14) : Color.black.opacity(0.075))
+                            : (isHighlighted
+                                ? BarLensPalette.badgeFill(.cyan, in: colorScheme)
+                                : (colorScheme == .dark ? Color.white.opacity(0.05) : Color.black.opacity(0.03)))
+                    )
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+    }
+}
+
+private struct LoupeChipButton: View {
+    let title: String
+    let icon: String?
+    var isSelected: Bool = false
+    let action: () -> Void
+    @State private var hovered = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4.5) {
+                if let icon {
+                    Image(systemName: icon)
+                        .font(.system(size: 10, weight: .bold))
+                }
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(
+                isSelected
+                    ? BarLensPalette.ink(.cyan, in: colorScheme)
+                    : .primary.opacity(0.86)
+            )
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4.5)
+            .background(
+                Capsule()
+                    .fill(
+                        isSelected
+                            ? BarLensPalette.badgeFill(.cyan, in: colorScheme)
+                            : (hovered
+                                ? (colorScheme == .dark ? Color.white.opacity(0.14) : Color.black.opacity(0.08))
+                                : (colorScheme == .dark ? Color.white.opacity(0.07) : Color.black.opacity(0.045)))
+                    )
+            )
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+    }
+}
+
+private struct LoupeUtilityButton: View {
+    let icon: String
+    let label: String
+    var isDestructive: Bool = false
+    let action: () -> Void
+    @State private var hovered = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let fg: Color = isDestructive && hovered
+            ? Color(red: 0.92, green: 0.26, blue: 0.25)
+            : .primary.opacity(hovered ? 0.94 : 0.74)
+
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 10.5, weight: .semibold))
+                Text(label)
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .foregroundStyle(fg)
+            .padding(.horizontal, 7.5)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(
+                        hovered
+                            ? (isDestructive
+                                ? Color(red: 0.92, green: 0.26, blue: 0.25).opacity(colorScheme == .dark ? 0.18 : 0.12)
+                                : (colorScheme == .dark ? Color.white.opacity(0.12) : Color.black.opacity(0.065)))
+                            : Color.clear
+                    )
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+    }
+}
+
+// MARK: - Gear Button & Item Button
+
 private struct FloatingBarGearButton: View {
     @ObservedObject var engine: DividerEngine
+    @ObservedObject var loupeCoordinator: LensLoupeCoordinator
     let onOpenSettings: () -> Void
     let onExpandInline: () -> Void
     @State private var hovered = false
     @State private var pressed = false
-    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         FloatingBarCircleChrome(isActive: false, hovered: hovered, isPressed: pressed) {
@@ -746,14 +1441,23 @@ private struct FloatingBarGearButton: View {
         .overlay {
             FloatingBarItemMouseBridge(
                 toolTip: tr("点按打开设置 · 右键打开快捷菜单", "Click: Open Settings · Right-Click: Quick Actions"),
-                onHoverChanged: { hovered = $0 },
+                onHoverChanged: { isHovering, _ in
+                    hovered = isHovering
+                    if isHovering {
+                        loupeCoordinator.dismissImmediately()
+                    }
+                },
                 onPressedChanged: { pressed = $0 },
-                onClick: onOpenSettings,
+                onClick: {
+                    loupeCoordinator.dismissImmediately()
+                    onOpenSettings()
+                },
                 onDragStarted: nil,
                 onDragOffsetChanged: nil,
                 onDragEnded: nil,
                 onMenuOpenChanged: { isOpen in
                     if isOpen {
+                        loupeCoordinator.dismissImmediately()
                         engine.isContextMenuOpen = true
                     } else {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
@@ -771,8 +1475,8 @@ private struct FloatingBarGearButton: View {
                     ))
 
                     let lensItem = MenuActionItem(
-                        title: tr("透镜状态透视", "Semantic Lens HUD"),
-                        symbol: "viewfinder"
+                        title: tr("光学透视浮窗", "Optical Lens Loupe"),
+                        symbol: "sparkle.magnifyingglass"
                     ) {
                         engine.setLensTelemetryEnabled(!engine.lensTelemetryEnabled)
                     }
@@ -865,7 +1569,7 @@ private struct FloatingBarItemButton: View {
     let itemIndex: Int
     let siblingIDs: [String]
     @ObservedObject var engine: DividerEngine
-    @Binding var hoveredItemID: String?
+    @ObservedObject var loupeCoordinator: LensLoupeCoordinator
     @Binding var activeDrag: ActiveFloatingBarDrag?
     @Binding var activeDragTranslationX: CGFloat
     @Binding var settleItemID: String?
@@ -877,6 +1581,10 @@ private struct FloatingBarItemButton: View {
 
     private var isDraggingThis: Bool {
         activeDrag?.itemID == item.id
+    }
+
+    private var isLoupeFocusedOnThis: Bool {
+        loupeCoordinator.activeTarget?.itemID == item.id
     }
 
     private var computedOffsetX: CGFloat {
@@ -902,6 +1610,7 @@ private struct FloatingBarItemButton: View {
     }
 
     private func triggerItem() {
+        loupeCoordinator.dismissImmediately()
         switch item.target {
         case .app(let bundleID, _):
             engine.activateFromFloatingBar(bundleID: bundleID)
@@ -913,7 +1622,7 @@ private struct FloatingBarItemButton: View {
     var body: some View {
         FloatingBarCircleChrome(
             isActive: isActive,
-            hovered: hovered || isDraggingThis,
+            hovered: hovered || isDraggingThis || isLoupeFocusedOnThis,
             isPressed: pressed
         ) {
             ZStack {
@@ -957,6 +1666,7 @@ private struct FloatingBarItemButton: View {
                         .frame(width: 22, height: 22)
                 }
 
+                // Only display genuine numeric unread counts on the icon badge — never static status dots.
                 if let unread = item.telemetry.unreadBadge {
                     Text(unread)
                         .font(.system(size: 8.5, weight: .bold, design: .rounded))
@@ -964,22 +1674,13 @@ private struct FloatingBarItemButton: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 4)
                         .padding(.vertical, 0.5)
-                        .background(Color(red: 0.92, green: 0.26, blue: 0.24), in: Capsule())
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                        .offset(x: 3, y: -1)
-                } else if item.telemetry.hasLiveSignal {
-                    Circle()
-                        .fill(BarLensPalette.ink(.cyan, in: colorScheme))
-                        .frame(width: 5.5, height: 5.5)
+                        .background(Color(red: 0.90, green: 0.25, blue: 0.24), in: Capsule())
                         .overlay {
-                            Circle()
-                                .strokeBorder(
-                                    colorScheme == .dark ? Color.black.opacity(0.6) : Color.white.opacity(0.9),
-                                    lineWidth: 0.8
-                                )
+                            Capsule()
+                                .strokeBorder(Color.white.opacity(0.75), lineWidth: 0.7)
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                        .offset(x: -3, y: 3)
+                        .offset(x: 3, y: -1)
                 }
 
                 if let count = item.badgeCount {
@@ -1010,17 +1711,21 @@ private struct FloatingBarItemButton: View {
                     ? ""
                     : tr("\(item.title) · 点按打开菜单 · 按住左右拖拽排序 · 右键快捷操作",
                          "\(item.title) · Click: Menu · Drag: Reorder · Right-Click: Actions"),
-                onHoverChanged: { isHovering in
+                onHoverChanged: { isHovering, screenRect in
                     hovered = isHovering
-                    if isHovering {
-                        hoveredItemID = item.id
-                    } else if hoveredItemID == item.id {
-                        hoveredItemID = nil
+                    if activeDrag == nil && !engine.isContextMenuOpen {
+                        loupeCoordinator.iconHoverChanged(
+                            itemID: item.id,
+                            isHovering: isHovering,
+                            screenRect: screenRect,
+                            lensEnabled: engine.lensTelemetryEnabled
+                        )
                     }
                 },
                 onPressedChanged: { pressed = $0 },
                 onClick: triggerItem,
                 onDragStarted: {
+                    loupeCoordinator.dismissImmediately()
                     settleItemID = nil
                     settleOffsetX = 0
                     activeDragTranslationX = 0
@@ -1033,7 +1738,6 @@ private struct FloatingBarItemButton: View {
                     )
                 },
                 onDragOffsetChanged: { rawDX in
-                    // Update raw translation without animation so the dragged icon stays 1:1 glued to the pointer.
                     activeDragTranslationX = rawDX
                     if let current = activeDrag, current.itemID == item.id {
                         let newTarget = current.computedTargetIndex(for: rawDX)
@@ -1077,6 +1781,7 @@ private struct FloatingBarItemButton: View {
                 },
                 onMenuOpenChanged: { isOpen in
                     if isOpen {
+                        loupeCoordinator.dismissImmediately()
                         engine.isContextMenuOpen = true
                     } else {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
@@ -1095,7 +1800,13 @@ private struct FloatingBarItemButton: View {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
-        let header = NSMenuItem(title: item.title, action: nil, keyEquivalent: "")
+        let headerTitle: String
+        if let vitals = item.vitals {
+            headerTitle = "\(item.title) · \(vitals.compactSummary)"
+        } else {
+            headerTitle = item.title
+        }
+        let header = NSMenuItem(title: headerTitle, action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
 
@@ -1110,6 +1821,31 @@ private struct FloatingBarItemButton: View {
             symbol: "menubar.arrow.down.rectangle",
             actionBlock: triggerItem
         ))
+
+        if case .app(let bundleID, _) = item.target {
+            menu.addItem(MenuActionItem(
+                title: tr("唤醒应用窗口", "Open App Window"),
+                symbol: "macwindow"
+            ) {
+                engine.activateApplicationWindow(bundleID: bundleID)
+            })
+
+            if !item.telemetry.tunnelActions.isEmpty {
+                menu.addItem(.separator())
+                let tunnelHeader = NSMenuItem(title: tr("子菜单直达", "Quick Menu Actions"), action: nil, keyEquivalent: "")
+                tunnelHeader.isEnabled = false
+                menu.addItem(tunnelHeader)
+                for action in item.telemetry.tunnelActions.prefix(5) {
+                    let m = MenuActionItem(
+                        title: action.title,
+                        symbol: action.isChecked ? "checkmark.circle" : "bolt"
+                    ) {
+                        engine.performTunnelAction(action, bundleID: bundleID)
+                    }
+                    menu.addItem(m)
+                }
+            }
+        }
 
         if case .app(let bundleID, _) = item.target,
            item.section == .visible,
@@ -1312,7 +2048,7 @@ private final class MenuActionItem: NSMenuItem {
 
 private struct FloatingBarItemMouseBridge: NSViewRepresentable {
     let toolTip: String
-    let onHoverChanged: (Bool) -> Void
+    let onHoverChanged: (Bool, NSRect?) -> Void
     let onPressedChanged: (Bool) -> Void
     let onClick: () -> Void
     let onDragStarted: (() -> Void)?
@@ -1344,11 +2080,8 @@ private struct FloatingBarItemMouseBridge: NSViewRepresentable {
     }
 }
 
-/// Native AppKit mouse handler for icons inside the non-activating FloatingBarPanel.
-/// Accepts first-mouse events without activating BarLens, tracks screen-space
-/// horizontal dragging for 1:1 icon reordering, and presents a native NSMenu on right-click.
 private final class FloatingBarItemMouseView: NSView {
-    var onHoverChanged: ((Bool) -> Void)?
+    var onHoverChanged: ((Bool, NSRect?) -> Void)?
     var onPressedChanged: ((Bool) -> Void)?
     var onClick: (() -> Void)?
     var onDragStarted: (() -> Void)?
@@ -1362,6 +2095,11 @@ private final class FloatingBarItemMouseView: NSView {
     private var didEnterDrag = false
     private var anchorScreenX: CGFloat = 0
     private var anchorScreenY: CGFloat = 0
+
+    private var currentScreenBounds: NSRect? {
+        guard let window else { return nil }
+        return window.convertToScreen(convert(bounds, to: nil))
+    }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         true
@@ -1383,12 +2121,12 @@ private final class FloatingBarItemMouseView: NSView {
     }
 
     override func mouseEntered(with event: NSEvent) {
-        onHoverChanged?(true)
+        onHoverChanged?(true, currentScreenBounds)
     }
 
     override func mouseExited(with event: NSEvent) {
         if !isTrackingLeftMouse {
-            onHoverChanged?(false)
+            onHoverChanged?(false, nil)
         }
     }
 
@@ -1442,7 +2180,7 @@ private final class FloatingBarItemMouseView: NSView {
 
         let localNow = window.map { convert($0.mouseLocationOutsideOfEventStream, from: nil) } ?? .zero
         if !bounds.contains(localNow) {
-            onHoverChanged?(false)
+            onHoverChanged?(false, nil)
         }
     }
 

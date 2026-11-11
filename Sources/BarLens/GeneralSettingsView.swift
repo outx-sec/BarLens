@@ -28,7 +28,7 @@ struct GeneralSettingsView: View {
                 Toggle(isOn: Binding(
                     get: { engine.lensTelemetryEnabled },
                     set: { engine.setLensTelemetryEnabled($0) })) {
-                    PreferenceLabel(symbol: "viewfinder", tone: .teal, title: tr("透镜状态透视", "Semantic Lens HUD"))
+                    PreferenceLabel(symbol: "sparkle.magnifyingglass", tone: .teal, title: tr("光学透视浮窗", "Optical Lens Loupe"))
                 }
                 .toggleStyle(.switch)
 
