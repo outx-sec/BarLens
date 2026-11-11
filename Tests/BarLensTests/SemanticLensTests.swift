@@ -148,4 +148,68 @@ final class SemanticLensTests: XCTestCase {
         XCTAssertEqual(weather.shortChip, "大部多云 · 23°")
         XCTAssertEqual(weather.fullSummary, "大部多云 · 23°")
     }
+
+    func testExtractsPassiveAXMenuStatusRowsAndDirectTunnelActions() {
+        let chatGPT = SemanticLensExtractor.extract(
+            appName: "ChatGPT",
+            bundleID: "com.openai.codex",
+            items: [
+                RawAXItemTelemetry(
+                    title: "",
+                    description: "ChatGPT",
+                    value: nil,
+                    help: "ChatGPT",
+                    menuEntries: [
+                        AXMenuSnapshotEntry(menuIndex: 0, title: "Computer Use", isEnabled: true),
+                        AXMenuSnapshotEntry(menuIndex: 2, title: "Running", isEnabled: false),
+                        AXMenuSnapshotEntry(menuIndex: 3, title: "调研 InnerSec MCP Server 改造方案", isEnabled: true),
+                        AXMenuSnapshotEntry(menuIndex: 5, title: "Quit ChatGPT", isEnabled: true),
+                    ]
+                )
+            ]
+        )
+
+        XCTAssertEqual(chatGPT.shortChip, "Running")
+        XCTAssertEqual(chatGPT.rows, [LensFactRow(label: nil, value: "Running", tone: .active)])
+        XCTAssertEqual(chatGPT.tunnelActions.map(\.title), [
+            "Computer Use",
+            "调研 InnerSec MCP Server 改造方案",
+        ])
+    }
+
+    func testParsesKeyValueRowsAndFusesDockUnreadBadges() {
+        let clash = SemanticLensExtractor.extract(
+            appName: "Clash Verge",
+            bundleID: "io.github.clash-verge-rev.clash-verge-rev",
+            items: [
+                RawAXItemTelemetry(
+                    help: """
+                    Clash Verge 2.5.8
+                    系统代理: on
+                    TUN: off
+                    订阅: ◈ NIVA Network.yaml
+                    """
+                )
+            ]
+        )
+        XCTAssertEqual(clash.rows, [
+            LensFactRow(label: "系统代理", value: "on", tone: .active),
+            LensFactRow(label: "TUN", value: "off", tone: .neutral),
+            LensFactRow(label: "订阅", value: "◈ NIVA Network", tone: .accent),
+        ])
+
+        let qq = SemanticLensExtractor.extract(
+            appName: "QQ",
+            bundleID: "com.tencent.qq",
+            items: [RawAXItemTelemetry()],
+            dockBadge: "1,646"
+        )
+        XCTAssertEqual(qq.unreadBadge, "99+")
+        XCTAssertEqual(qq.rows.count, 1)
+
+        let vitals = ProcessVitals(memoryBytes: 1_574 * 1_048_576, cpuPercent: 12.4)
+        XCTAssertTrue(vitals.isHighMemory)
+        XCTAssertEqual(vitals.formattedMemory, "1.54 GB")
+        XCTAssertEqual(vitals.formattedCPU, "12%")
+    }
 }

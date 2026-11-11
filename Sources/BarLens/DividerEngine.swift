@@ -46,6 +46,7 @@ final class DividerEngine: ObservableObject {
     @Published private(set) var glassOpacity = Defaults.glassOpacity
     @Published private(set) var rimIntensity = Defaults.rimIntensity
     @Published private(set) var lensTelemetryEnabled = Defaults.lensTelemetryEnabled
+    @Published private(set) var systemTelemetryRevision = 0
     @Published private(set) var spatialBudgetPolicy = Defaults.spatialBudgetPolicy
     @Published private(set) var spatialExemptBundleIDs = Defaults.spatialExemptBundleIDs
     @Published private(set) var overflowDemotedBundleIDs: Set<String> = []
@@ -223,6 +224,11 @@ final class DividerEngine: ObservableObject {
     var isFloatingBarHovered = false {
         didSet {
             if isFloatingBarHovered != oldValue { scheduleAutoRehideIfNeeded() }
+        }
+    }
+    var isLensLoupeHovered = false {
+        didSet {
+            if isLensLoupeHovered != oldValue { scheduleAutoRehideIfNeeded() }
         }
     }
     var isContextMenuOpen = false {
@@ -1639,10 +1645,62 @@ final class DividerEngine: ObservableObject {
     }
 
     func telemetry(for systemItem: SystemItem) -> LensTelemetry {
+        _ = systemTelemetryRevision
         guard lensTelemetryEnabled else { return .empty }
         let canonical = SystemItemName.canonicalIdentifier(for: systemItem.identifier)
         let fallback = systemAXTelemetryByID[canonical] ?? .empty
         return SystemTelemetryReader.shared.telemetry(for: systemItem, fallbackAX: fallback)
+    }
+
+    func bumpSystemTelemetry() {
+        systemTelemetryRevision &+= 1
+    }
+
+    /// Executes an `AXMenu` sub-item directly without touching or flashing the top menu bar,
+    /// falling back to opening the status item menu if the target app dynamically rebuilt its menu.
+    func performTunnelAction(_ action: LensTunnelAction, bundleID: String, collapseBarAfter: Bool = true) {
+        recordItemInteraction(bundleID: bundleID)
+        itemScanQueue.async { [weak self] in
+            let ok = ItemEnumerator.performTunneledMenuAction(
+                bundleID: bundleID,
+                statusItemIndex: action.statusItemIndex,
+                menuIndex: action.menuIndex,
+                expectedTitle: action.title
+            )
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if ok {
+                    if collapseBarAfter {
+                        self.setReveal(.none)
+                    } else {
+                        self.refreshRunningApplications()
+                    }
+                } else {
+                    self.activateFromFloatingBar(bundleID: bundleID)
+                }
+            }
+        }
+    }
+
+    /// Brings the target application's windows to the front (or reopens its main window).
+    func activateApplicationWindow(bundleID: String) {
+        recordItemInteraction(bundleID: bundleID)
+        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first {
+            if let url = app.bundleURL {
+                let config = NSWorkspace.OpenConfiguration()
+                config.activates = true
+                NSWorkspace.shared.openApplication(at: url, configuration: config, completionHandler: nil)
+            } else {
+                app.activate()
+            }
+        }
+        setReveal(.none)
+    }
+
+    func quitApplication(bundleID: String) {
+        for app in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID) {
+            app.terminate()
+        }
     }
 
     private func updateSystemAXTelemetry(from scannedItems: [MenuBarItem]) {
@@ -1851,7 +1909,7 @@ final class DividerEngine: ObservableObject {
                   self.reveal != .none, self.autoRehideInterval.seconds != nil else { return }
             let hasActivePopup = self.pinnedBundleID != nil
                 || (self.lastActivatedFromFloatingBar && ItemEnumerator.isControlCenterPopupOpen())
-            if self.isQuickPanelOpen || self.isFloatingBarHovered || self.isContextMenuOpen || Self.isPointerInMenuBarBand() || hasActivePopup {
+            if self.isQuickPanelOpen || self.isFloatingBarHovered || self.isLensLoupeHovered || self.isContextMenuOpen || Self.isPointerInMenuBarBand() || hasActivePopup {
                 self.scheduleAutoRehideCheck(after: 1.5)
                 return
             }

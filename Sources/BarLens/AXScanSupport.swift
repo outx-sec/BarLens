@@ -91,14 +91,32 @@ final class AXReadBudget {
         try attribute(element, name, optional: true) as? String
     }
 
+    func bool(_ element: AXUIElement, _ name: String) throws -> Bool? {
+        guard let raw = try attribute(element, name, optional: true) else { return nil }
+        if let b = raw as? Bool { return b }
+        if let n = raw as? NSNumber { return n.boolValue }
+        return nil
+    }
+
+    func int(_ element: AXUIElement, _ name: String) throws -> Int? {
+        guard let raw = try attribute(element, name, optional: true) else { return nil }
+        if let i = raw as? Int { return i }
+        if let n = raw as? NSNumber { return n.intValue }
+        return nil
+    }
+
     /// Optional labels do not determine whether an item exists. Unlike a
     /// failed geometry/tree read, missing metadata must not discard its owner.
     /// Cancellation and the sweep deadline still stop all further work.
-    static func optionalMetadata(_ read: () throws -> String?) throws -> String? {
+    static func optionalValue<T>(_ read: () throws -> T?) throws -> T? {
         do { return try read() }
         catch AXScanFailure.cancelled { throw AXScanFailure.cancelled }
         catch AXScanFailure.timedOut { throw AXScanFailure.timedOut }
         catch { return nil }
+    }
+
+    static func optionalMetadata(_ read: () throws -> String?) throws -> String? {
+        try optionalValue(read)
     }
 }
 

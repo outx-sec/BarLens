@@ -35,6 +35,8 @@ struct AppEntry: Identifiable {
     var isClassified: Bool = true
     /// Zero-capture live Accessibility telemetry distilled for BarLens's Semantic Lens.
     var telemetry: LensTelemetry = .empty
+    /// Live memory footprint and CPU activity sampled via `proc_pid_rusage`.
+    var vitals: ProcessVitals? = nil
 
     var id: String { bundleID }
 
@@ -220,15 +222,20 @@ enum AppCatalog {
 
         var labels: [String: [String]] = [:]
         var rawTelemetryByOwner: [String: [RawAXItemTelemetry]] = [:]
+        var dockBadgeByOwner: [String: String] = [:]
         for item in discovered {
             rawTelemetryByOwner[item.ownerBundleID, default: []].append(
                 RawAXItemTelemetry(
                     title: item.axTitle ?? item.label,
                     description: item.axDescription,
                     value: item.axValue,
-                    help: item.axHelp
+                    help: item.axHelp,
+                    menuEntries: item.axMenuEntries
                 )
             )
+            if let badge = item.dockBadge, !badge.isEmpty {
+                dockBadgeByOwner[item.ownerBundleID] = badge
+            }
             // Digits are state, not identity: WeChat publishes its unread count
             // as its title, and a count in a list of names is noise that changes
             // underfoot. Words are kept even when they are also state —
@@ -264,9 +271,11 @@ enum AppCatalog {
                 ? SemanticLensExtractor.extract(
                     appName: details.name,
                     bundleID: bundleID,
-                    items: rawTelemetryByOwner[bundleID] ?? []
+                    items: rawTelemetryByOwner[bundleID] ?? [],
+                    dockBadge: dockBadgeByOwner[bundleID]
                 )
                 : .empty
+            let sampledVitals = app.flatMap { ProcessVitalsReader.shared.vitals(forPID: $0.processIdentifier) }
             return AppEntry(bundleID: bundleID,
                             name: details.name,
                             icon: details.icon,
@@ -278,7 +287,8 @@ enum AppCatalog {
                                 && !counts.keys.contains(bundleID),
                             itemCount: counts[bundleID] ?? 0,
                             isClassified: model.isClassified(bundleID),
-                            telemetry: extractedTelemetry)
+                            telemetry: extractedTelemetry,
+                            vitals: sampledVitals)
         }
 
         return entries.sorted {

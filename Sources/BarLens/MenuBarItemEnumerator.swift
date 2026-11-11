@@ -47,6 +47,8 @@ struct MenuBarItem {
     var axDescription: String? = nil
     var axValue: String? = nil
     var axHelp: String? = nil
+    var axMenuEntries: [AXMenuSnapshotEntry] = []
+    var dockBadge: String? = nil
 }
 
 struct ItemScanApplication {
@@ -274,6 +276,13 @@ enum ItemEnumerator {
                     let nonEmptyTitle = (title?.isEmpty == false) ? title : nil
                     let nonEmptyDesc = (desc?.isEmpty == false) ? desc : nil
                     let label = nonEmptyTitle ?? nonEmptyDesc
+                    let menuEntries: [AXMenuSnapshotEntry]
+                    if application.bundleID != "com.apple.MenuBarAgent"
+                        && !SectionModel.ownIdentifiers.contains(application.bundleID) {
+                        menuEntries = try readMenuSnapshot(from: child, statusItemIndex: index, reader: reader)
+                    } else {
+                        menuEntries = []
+                    }
                     appItems.append(MenuBarItem(ownerBundleID: application.bundleID,
                         ownerPID: application.pid, frame: frame, display: display,
                         axIdentifier: identifier, label: label,
@@ -281,7 +290,8 @@ enum ItemEnumerator {
                         axTitle: nonEmptyTitle,
                         axDescription: nonEmptyDesc,
                         axValue: (val?.isEmpty == false) ? val : nil,
-                        axHelp: (help?.isEmpty == false) ? help : nil))
+                        axHelp: (help?.isEmpty == false) ? help : nil,
+                        axMenuEntries: menuEntries))
                 }
                 ownerResults.record(owner: application.bundleID, .complete(appItems))
             } catch {
@@ -313,6 +323,18 @@ enum ItemEnumerator {
                 screens: context.screens,
                 reader: reader
             )
+        }
+        if reader.failure == nil,
+           let dockPID = context.applications.first(where: { $0.bundleID == "com.apple.dock" })?.pid {
+            let dockBadges = readDockBadges(dockPID: dockPID, reader: reader)
+            if !dockBadges.isEmpty {
+                for idx in result.items.indices {
+                    let bid = result.items[idx].ownerBundleID
+                    if let badge = dockBadges[bid] {
+                        result.items[idx].dockBadge = badge
+                    }
+                }
+            }
         }
         if let failure = reader.failure {
             result.timedOut = failure == .timedOut
@@ -912,6 +934,173 @@ enum ItemEnumerator {
         return screens.first {
             $0.1.contains(midpoint) && midpoint.y <= $0.1.minY + 60
         }?.0
+    }
+
+    private static func readMenuSnapshot(from statusItem: AXUIElement,
+                                         statusItemIndex: Int,
+                                         reader: AXReadBudget) throws -> [AXMenuSnapshotEntry] {
+        guard let subChildren = try AXReadBudget.optionalValue({ try reader.children(statusItem) }),
+              let firstChild = subChildren.first else {
+            return []
+        }
+        let role = try AXReadBudget.optionalMetadata {
+            try reader.string(firstChild, kAXRoleAttribute as String)
+        }
+        guard role == (kAXMenuRole as String) else { return [] }
+        guard let menuItems = try AXReadBudget.optionalValue({ try reader.children(firstChild) }),
+              !menuItems.isEmpty else {
+            return []
+        }
+
+        var entries: [AXMenuSnapshotEntry] = []
+        for (menuIndex, itemElement) in menuItems.prefix(18).enumerated() {
+            let rawTitle = try AXReadBudget.optionalMetadata {
+                try reader.string(itemElement, kAXTitleAttribute as String)
+            }
+            guard let title = rawTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !title.isEmpty else {
+                continue
+            }
+            let enabled = (try AXReadBudget.optionalValue {
+                try reader.bool(itemElement, kAXEnabledAttribute as String)
+            }) ?? true
+            let mark = try AXReadBudget.optionalMetadata {
+                try reader.string(itemElement, "AXMenuItemMarkChar")
+            }
+            let cmdChar = try AXReadBudget.optionalMetadata {
+                try reader.string(itemElement, "AXMenuItemCmdChar")
+            }
+            let cmdMods = try AXReadBudget.optionalValue {
+                try reader.int(itemElement, "AXMenuItemCmdModifiers")
+            }
+            let shortcut = formatMenuShortcut(cmdChar: cmdChar, modifiers: cmdMods)
+            entries.append(AXMenuSnapshotEntry(
+                statusItemIndex: statusItemIndex,
+                menuIndex: menuIndex,
+                title: title,
+                isEnabled: enabled,
+                markChar: (mark?.isEmpty == false) ? mark : nil,
+                shortcutHint: shortcut
+            ))
+            if entries.count >= 14 {
+                break
+            }
+        }
+        return entries
+    }
+
+    private static func formatMenuShortcut(cmdChar: String?, modifiers: Int?) -> String? {
+        guard let rawChar = cmdChar?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawChar.isEmpty else {
+            return nil
+        }
+        let mods = modifiers ?? 0
+        var out = ""
+        if (mods & (1 << 2)) != 0 { out += "⌃" }
+        if (mods & (1 << 1)) != 0 { out += "⌥" }
+        if (mods & (1 << 0)) != 0 { out += "⇧" }
+        if (mods & (1 << 3)) == 0 { out += "⌘" }
+        out += rawChar.uppercased()
+        return out
+    }
+
+    private static func readDockBadges(dockPID: pid_t, reader: AXReadBudget) -> [String: String] {
+        guard dockPID > 0 else { return [:] }
+        let dockApp = AXUIElementCreateApplication(dockPID)
+        guard let lists = try? reader.children(dockApp) else { return [:] }
+        var badges: [String: String] = [:]
+        for list in lists.prefix(3) {
+            guard let dockItems = try? reader.children(list) else { continue }
+            for dockItem in dockItems.prefix(48) {
+                guard reader.failure == nil else { return badges }
+                guard let status = (try? reader.string(dockItem, "AXStatusLabel"))?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                      !status.isEmpty else {
+                    continue
+                }
+                if let rawURL = try? reader.attribute(dockItem, kAXURLAttribute as String, optional: true) {
+                    let resolvedURL: URL?
+                    if let url = rawURL as? URL {
+                        resolvedURL = url
+                    } else if let str = rawURL as? String {
+                        resolvedURL = URL(string: str)
+                    } else {
+                        resolvedURL = nil
+                    }
+                    if let url = resolvedURL,
+                       let bundleID = Bundle(url: url)?.bundleIdentifier,
+                       !bundleID.isEmpty {
+                        badges[bundleID] = status
+                    }
+                }
+            }
+        }
+        return badges
+    }
+
+    /// Invokes an `NSMenuItem` inside an application's status item `AXMenu` directly
+    /// via `kAXPressAction` without opening or flashing the top menu bar.
+    @discardableResult
+    static func performTunneledMenuAction(bundleID: String,
+                                          statusItemIndex: Int,
+                                          menuIndex: Int,
+                                          expectedTitle: String) -> Bool {
+        precondition(!Thread.isMainThread, "AX action must run off the main thread")
+        guard hasAccessibilityPermission else { return false }
+        let pids: [pid_t] = DispatchQueue.main.sync {
+            NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+                .map(\.processIdentifier)
+                .filter { $0 > 0 }
+        }
+        guard !pids.isEmpty else { return false }
+        let reader = AXReadBudget(seconds: 1.0, cancellation: AXScanCancellation())
+
+        for pid in pids {
+            let app = AXUIElementCreateApplication(pid)
+            guard let extras = try? reader.element(app, "AXExtrasMenuBar"),
+                  let statusItems = try? reader.children(extras),
+                  !statusItems.isEmpty else {
+                continue
+            }
+            let orderedIndices: [Int]
+            if statusItems.indices.contains(statusItemIndex) {
+                orderedIndices = [statusItemIndex] + statusItems.indices.filter { $0 != statusItemIndex }
+            } else {
+                orderedIndices = Array(statusItems.indices)
+            }
+
+            for idx in orderedIndices {
+                guard let subChildren = try? reader.children(statusItems[idx]),
+                      let menu = subChildren.first,
+                      let menuItems = try? reader.children(menu) else {
+                    continue
+                }
+                // Match exact title first, then fall back to menuIndex if title still matches prefix.
+                if let exactMatch = menuItems.first(where: { el in
+                    let t = (try? reader.string(el, kAXTitleAttribute as String))?
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    return t == expectedTitle
+                }) {
+                    AXUIElementSetMessagingTimeout(exactMatch, 0.35)
+                    if AXUIElementPerformAction(exactMatch, kAXPressAction as CFString) == .success {
+                        return true
+                    }
+                }
+                if menuItems.indices.contains(menuIndex) {
+                    let candidate = menuItems[menuIndex]
+                    if let t = (try? reader.string(candidate, kAXTitleAttribute as String))?
+                        .trimmingCharacters(in: .whitespacesAndNewlines),
+                       !t.isEmpty,
+                       t.localizedCaseInsensitiveContains(String(expectedTitle.prefix(4))) {
+                        AXUIElementSetMessagingTimeout(candidate, 0.35)
+                        if AXUIElementPerformAction(candidate, kAXPressAction as CFString) == .success {
+                            return true
+                        }
+                    }
+                }
+            }
+        }
+        return false
     }
 
     private static func frame(of element: AXUIElement, reader: AXReadBudget) throws -> CGRect {
