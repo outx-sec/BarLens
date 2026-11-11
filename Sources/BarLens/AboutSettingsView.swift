@@ -4,6 +4,7 @@ import SwiftUI
 struct AboutSettingsView: View {
     @ObservedObject var engine: DividerEngine
     @State private var copiedDiagnostics = false
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Form {
@@ -28,13 +29,14 @@ struct AboutSettingsView: View {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text("BarLens")
                             .font(.system(size: 20, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.primary)
                         Text(tr("栏镜", "Liquid Glass Menu Bar"))
                             .font(.system(size: 12.5, weight: .medium, design: .rounded))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.primary.opacity(0.78))
                     }
                     Text(tr("版本 \(Self.version) · 构建 \(Self.build)", "Version \(Self.version) · Build \(Self.build)"))
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.primary.opacity(0.72))
                         .textSelection(.enabled)
                 }
                 Spacer(minLength: 0)
@@ -47,7 +49,7 @@ struct AboutSettingsView: View {
         Section(tr("权限与系统", "Permissions & System")) {
             PermissionRow(
                 symbol: engine.hasAccessibility ? "checkmark.shield" : "hand.raised",
-                tint: engine.hasAccessibility ? .green : .orange,
+                tone: engine.hasAccessibility ? .green : .orange,
                 title: tr("辅助功能权限", "Accessibility Permission"),
                 status: engine.hasAccessibility ? tr("已授权", "Granted") : tr("未授权", "Not Granted"),
                 action: engine.hasAccessibility ? nil
@@ -55,7 +57,7 @@ struct AboutSettingsView: View {
 
             PermissionRow(
                 symbol: engine.hasSystemLedger ? "checkmark.seal" : "list.bullet.rectangle",
-                tint: engine.hasSystemLedger ? .green : .secondary,
+                tone: engine.hasSystemLedger ? .green : .neutral,
                 title: tr("完全磁盘访问（系统清单识别）", "Full Disk Access (System Ledger)"),
                 status: engine.hasSystemLedger ? tr("已启用", "Enabled") : tr("可选", "Optional"),
                 action: engine.hasSystemLedger ? nil
@@ -63,7 +65,7 @@ struct AboutSettingsView: View {
 
             PermissionRow(
                 symbol: "menubar.rectangle",
-                tint: .blue,
+                tone: .blue,
                 title: tr("系统控制中心设置", "Control Center Settings"),
                 status: nil,
                 action: AboutAction(title: tr("打开设置", "Open Settings"), url: Self.controlCenter))
@@ -93,8 +95,9 @@ struct AboutSettingsView: View {
                 LabeledContent(tr("助手最近退出", "Last Helper Exit"), value: reason)
             }
             if let warning = engine.scanWarning {
-                Label(warning, systemImage: "exclamationmark.triangle")
-                    .font(.caption).foregroundStyle(.orange)
+                Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(BarLensPalette.ink(.orange, in: colorScheme))
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack {
@@ -140,26 +143,33 @@ private struct AboutAction {
 
 private struct PermissionRow: View {
     let symbol: String
-    let tint: Color
+    let tone: SemanticTone
     let title: String
     let status: String?
     var action: AboutAction?
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
+        let accent = BarLensPalette.ink(tone, in: colorScheme)
         HStack(spacing: 11) {
             Image(systemName: symbol)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(tint)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(accent)
                 .frame(width: 28, height: 28)
-                .background(tint.opacity(0.11), in: RoundedRectangle(cornerRadius: 8))
+                .background(BarLensPalette.badgeFill(tone, in: colorScheme), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .accessibilityHidden(true)
             Text(title)
                 .font(.system(size: 13))
+                .foregroundStyle(.primary)
             Spacer(minLength: 12)
             if let status {
                 Text(status)
-                    .font(.system(size: 12))
-                    .foregroundStyle(tint == .green ? .green : .secondary)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(
+                        tone == .green
+                            ? BarLensPalette.ink(.green, in: colorScheme)
+                            : (tone == .orange ? BarLensPalette.ink(.orange, in: colorScheme) : .primary.opacity(0.74))
+                    )
             }
             if let action {
                 Button(action.title) {

@@ -14,14 +14,14 @@ struct GeneralSettingsView: View {
                 Toggle(isOn: Binding(
                     get: { engine.launchAtLogin },
                     set: { engine.setLaunchAtLogin($0) })) {
-                    PreferenceLabel(symbol: "power", tint: .green, title: tr("登录时启动", "Launch at Login"))
+                    PreferenceLabel(symbol: "power", tone: .green, title: tr("登录时启动", "Launch at Login"))
                 }
                 .toggleStyle(.switch)
 
                 Toggle(isOn: Binding(
                     get: { engine.alwaysHiddenEnabled },
                     set: { engine.setAlwaysHiddenEnabled($0) })) {
-                    PreferenceLabel(symbol: "eye.slash.fill", tint: .indigo, title: tr("启用「永久隐藏」", "Enable “Always Hidden” Section"))
+                    PreferenceLabel(symbol: "eye.slash.fill", tone: .indigo, title: tr("启用「永久隐藏」", "Enable “Always Hidden” Section"))
                 }
                 .toggleStyle(.switch)
 
@@ -32,7 +32,7 @@ struct GeneralSettingsView: View {
                         Text(delay.title).tag(delay)
                     }
                 } label: {
-                    PreferenceLabel(symbol: "cursorarrow.motionlines", tint: .purple, title: tr("悬停触发图标展开", "Hover Trigger to Reveal"))
+                    PreferenceLabel(symbol: "cursorarrow.motionlines", tone: .purple, title: tr("悬停触发图标展开", "Hover Trigger to Reveal"))
                 }
                 .pickerStyle(.menu)
 
@@ -43,7 +43,7 @@ struct GeneralSettingsView: View {
                         Text(interval.title).tag(interval)
                     }
                 } label: {
-                    PreferenceLabel(symbol: "timer", tint: .orange, title: tr("展开后自动收起", "Auto-Collapse After"))
+                    PreferenceLabel(symbol: "timer", tone: .orange, title: tr("展开后自动收起", "Auto-Collapse After"))
                 }
                 .pickerStyle(.menu)
 
@@ -54,7 +54,7 @@ struct GeneralSettingsView: View {
                         Text(lang.title).tag(lang)
                     }
                 } label: {
-                    PreferenceLabel(symbol: "globe", tint: .cyan, title: tr("界面语言", "Interface Language"))
+                    PreferenceLabel(symbol: "globe", tone: .cyan, title: tr("界面语言", "Interface Language"))
                 }
                 .pickerStyle(.menu)
             }
@@ -63,7 +63,7 @@ struct GeneralSettingsView: View {
                 DefaultSectionRow(
                     title: tr("新应用", "New Applications"),
                     symbol: "app.badge",
-                    tint: .blue,
+                    tone: .blue,
                     section: Binding(get: { engine.unclassifiedSection },
                                      set: { engine.setUnclassifiedSection($0) }),
                     alwaysHiddenEnabled: engine.alwaysHiddenEnabled)
@@ -71,7 +71,7 @@ struct GeneralSettingsView: View {
                 DefaultSectionRow(
                     title: tr("新识别的系统图标", "New System Items"),
                     symbol: "menubar.rectangle",
-                    tint: .teal,
+                    tone: .teal,
                     section: Binding(get: { engine.newSystemItemSection },
                                      set: { engine.setNewSystemItemSection($0) }),
                     alwaysHiddenEnabled: engine.alwaysHiddenEnabled)
@@ -86,7 +86,7 @@ struct GeneralSettingsView: View {
                             engine.setHotkey(hotkey, for: action)
                         }
                     } label: {
-                        PreferenceLabel(symbol: "keyboard", tint: .purple, title: action.title)
+                        PreferenceLabel(symbol: "keyboard", tone: .purple, title: action.title)
                     }
                 }
             }
@@ -127,13 +127,13 @@ struct GeneralSettingsView: View {
                         .controlSize(.small)
                     }
                 } label: {
-                    PreferenceLabel(symbol: "externaldrive.badge.checkmark", tint: .mint, title: tr("分区与外观配置文件", "Sections & Appearance Profile"))
+                    PreferenceLabel(symbol: "externaldrive.badge.checkmark", tone: .mint, title: tr("分区与外观配置文件", "Sections & Appearance Profile"))
                 }
 
                 if let profileNotice {
                     Text(profileNotice)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.primary.opacity(0.78))
                 }
             }
         }
@@ -186,7 +186,7 @@ struct GeneralSettingsView: View {
 private struct DefaultSectionRow: View {
     let title: String
     let symbol: String
-    let tint: Color
+    let tone: SemanticTone
     @Binding var section: SectionModel.Section
     let alwaysHiddenEnabled: Bool
 
@@ -199,7 +199,7 @@ private struct DefaultSectionRow: View {
                 Text(option.title).tag(option)
             }
         } label: {
-            PreferenceLabel(symbol: symbol, tint: tint, title: title)
+            PreferenceLabel(symbol: symbol, tone: tone, title: title)
         }
         .pickerStyle(.menu)
     }
@@ -211,19 +211,22 @@ private struct DefaultSectionRow: View {
 
 private struct PreferenceLabel: View {
     let symbol: String
-    let tint: Color
+    let tone: SemanticTone
     let title: String
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
+        let accent = BarLensPalette.ink(tone, in: colorScheme)
         HStack(spacing: 11) {
             Image(systemName: symbol)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(tint)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(accent)
                 .frame(width: 28, height: 28)
-                .background(tint.opacity(0.11), in: RoundedRectangle(cornerRadius: 8))
+                .background(BarLensPalette.badgeFill(tone, in: colorScheme), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .accessibilityHidden(true)
             Text(title)
                 .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(.primary)
         }
         .padding(.vertical, 2)
     }
@@ -233,21 +236,23 @@ private struct GestureRow: View {
     let symbol: String
     let title: String
     let detail: String
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack(spacing: 11) {
             Image(systemName: symbol)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(BarLensPalette.ink(.blue, in: colorScheme))
                 .frame(width: 28, height: 28)
-                .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+                .background(BarLensPalette.badgeFill(.blue, in: colorScheme), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .accessibilityHidden(true)
             Text(title)
                 .font(.system(size: 13))
+                .foregroundStyle(.primary)
             Spacer(minLength: 16)
             Text(detail)
                 .font(.system(size: 12))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary.opacity(0.76))
         }
         .padding(.vertical, 2)
     }

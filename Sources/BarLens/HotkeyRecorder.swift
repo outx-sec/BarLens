@@ -30,7 +30,7 @@ struct HotkeyRecorder: View {
                 Button {
                     onChange(nil)
                 } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.primary.opacity(0.68))
                 }
                 .buttonStyle(.plain)
                 .help(tr("清除快捷键", "Clear Shortcut"))

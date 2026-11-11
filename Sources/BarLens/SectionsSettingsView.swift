@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The 划分 pane: every app that owns a status item, and which section it is in.
@@ -10,6 +11,7 @@ struct SectionsSettingsView: View {
     @StateObject private var discovery = SystemItemDiscovery()
     @State private var query = ""
     @State private var showingClearConfirmation = false
+    @Environment(\.colorScheme) private var colorScheme
 
     private var entries: [AppEntry] { catalog.entries }
 
@@ -27,7 +29,7 @@ struct SectionsSettingsView: View {
             searchField
             list
             if engine.isConfigured {
-                Divider()
+                Divider().opacity(0.35)
                 footer
             }
         }
@@ -35,8 +37,6 @@ struct SectionsSettingsView: View {
             engine.refreshRunningApplications()
             rebuild()
         }
-        // Anything that can change which apps are listed: an app launching or
-        // quitting, a permission being granted, or an assignment being made.
         .onChange(of: engine.catalogRevision) { _, _ in rebuild() }
         .onChange(of: query) { _, value in catalog.filter(query: value) }
         .alert(tr("清除所有分区？", "Clear All Sections?"), isPresented: $showingClearConfirmation) {
@@ -71,6 +71,8 @@ struct SectionsSettingsView: View {
         HStack(spacing: 8) {
             ForEach(visibleSections, id: \.self) { section in
                 let revealed = isSectionRevealed(section)
+                let accent = section.readableTint(in: colorScheme)
+                let isHighlighted = revealed && section != .visible
                 Button {
                     switch section {
                     case .visible:      engine.setReveal(.none)
@@ -79,29 +81,32 @@ struct SectionsSettingsView: View {
                     }
                 } label: {
                     HStack(spacing: 7) {
-                        Label(section.title, systemImage: section.symbol)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(section.tint)
+                        Image(systemName: section.symbol)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(accent)
+                        Text(section.title)
+                            .font(.system(size: 12.5, weight: isHighlighted ? .semibold : .medium))
+                            .foregroundStyle(.primary)
                         Spacer(minLength: 4)
-                        if revealed && section != .visible {
+                        if isHighlighted {
                             Text(tr("已展开", "Revealed"))
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(section.tint)
-                                .padding(.horizontal, 6)
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(accent)
+                                .padding(.horizontal, 6.5)
                                 .padding(.vertical, 2)
-                                .background(section.tint.opacity(0.14), in: Capsule())
+                                .background(BarLensPalette.badgeFill(section.tone, in: colorScheme), in: Capsule())
                         }
                         Text("\(count(for: section))")
-                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .font(.system(size: 13.5, weight: .bold, design: .rounded))
                             .monospacedDigit()
-                            .foregroundStyle(section.tint)
+                            .foregroundStyle(.primary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 13)
                     .padding(.vertical, 10)
                     .opticalPlatter(
                         cornerRadius: 12,
-                        isSelected: revealed && section != .visible,
+                        isSelected: isHighlighted,
                         tint: section.tint
                     )
                     .contentShape(RoundedRectangle(cornerRadius: 12))
@@ -118,11 +123,14 @@ struct SectionsSettingsView: View {
 
     private var searchField: some View {
         HStack(spacing: 9) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField(tr("搜索应用或系统图标", "Search apps or system items"), text: $query).textFieldStyle(.plain)
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.primary.opacity(0.68))
+            TextField(tr("搜索应用或系统图标", "Search apps or system items"), text: $query)
+                .textFieldStyle(.plain)
             if !query.isEmpty {
                 Button { query = "" } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.primary.opacity(0.6))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(tr("清除搜索", "Clear Search"))
@@ -134,12 +142,9 @@ struct SectionsSettingsView: View {
         .padding(.vertical, 9)
         .opticalPlatter(cornerRadius: 12, isSelected: false)
         .padding(.horizontal, 20)
-        .padding(.bottom, 6)
+        .padding(.bottom, 10)
     }
 
-    /// Rescanning is not just a redraw: an app that launched since the list was
-    /// built owns a status item now, and the engine's cached set of running
-    /// applications has to hear about it before the next apply can admit it.
     private var refreshButton: some View {
         Button {
             engine.refreshRunningApplications()
@@ -152,84 +157,100 @@ struct SectionsSettingsView: View {
             }
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(.primary.opacity(0.75))
         .frame(width: 18, height: 18)
         .disabled(catalog.isLoading)
         .accessibilityLabel(tr("刷新应用列表", "Refresh App List"))
         .help(tr("重新扫描菜单栏，刷新应用列表", "Rescan menu bar and refresh list"))
     }
 
-    // MARK: - List
+    // MARK: - Grouped Card List (replaces AppKit List sticky dark bars)
 
     private var list: some View {
-        List {
-            if query.isEmpty || !filteredSystemItems.isEmpty { systemItems }
-
-            ForEach(visibleSections, id: \.self) { section in
-                let rows = entries.filter {
-                    $0.section == section || (section == .hidden && !engine.alwaysHiddenEnabled
-                                              && $0.section == .alwaysHidden)
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 18) {
+                if query.isEmpty || !filteredSystemItems.isEmpty {
+                    systemItemsCard
                 }
-                if !rows.isEmpty {
-                    Section {
-                        ForEach(rows) { entry in
-                            AppRow(entry: entry, engine: engine)
+
+                ForEach(visibleSections, id: \.self) { section in
+                    let rows = entries.filter {
+                        $0.section == section || (section == .hidden && !engine.alwaysHiddenEnabled
+                                                  && $0.section == .alwaysHidden)
+                    }
+                    if !rows.isEmpty {
+                        SectionGroupCard(
+                            symbol: section.symbol,
+                            tone: section.tone,
+                            title: section.title,
+                            count: rows.count
+                        ) {
+                            ForEach(Array(rows.enumerated()), id: \.element.id) { idx, entry in
+                                if idx > 0 {
+                                    Divider().opacity(0.32).padding(.leading, 46)
+                                }
+                                AppRow(entry: entry, engine: engine)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                            }
                         }
-                    } header: {
-                        HStack(spacing: 6) {
-                            Label(section.title, systemImage: section.symbol)
-                            Spacer()
-                            Text("\(rows.count)").monospacedDigit()
-                        }
-                        .font(.subheadline)
-                        .foregroundStyle(section.tint)
                     }
                 }
-            }
 
-            if !catalog.isLoading && entries.isEmpty && (query.isEmpty || filteredSystemItems.isEmpty) {
-                Section {
-                    Text(query.isEmpty ? tr("暂无状态栏图标", "No menu bar items found") : tr("无匹配项目", "No matching items"))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
+                if !catalog.isLoading && entries.isEmpty && (query.isEmpty || filteredSystemItems.isEmpty) {
+                    VStack(spacing: 6) {
+                        Text(query.isEmpty ? tr("暂无状态栏图标", "No menu bar items found") : tr("无匹配项目", "No matching items"))
+                            .font(.system(size: 12.5, weight: .medium))
+                            .foregroundStyle(.primary.opacity(0.72))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 28)
+                    .opticalPlatter(cornerRadius: 13, isSelected: false)
                 }
             }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 6)
+            .padding(.bottom, 12)
         }
-        .listStyle(.inset)
-        .scrollContentBackground(.hidden)
         .overlay {
             if catalog.isLoading && entries.isEmpty {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color(nsColor: .windowBackgroundColor))
-                    VStack(spacing: 8) {
-                        ProgressView().controlSize(.small)
-                        Text(tr("正在扫描…", "Scanning…")).font(.caption).foregroundStyle(.secondary)
-                    }
+                VStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(tr("正在扫描…", "Scanning…"))
+                        .font(.caption)
+                        .foregroundStyle(.primary.opacity(0.76))
                 }
+                .padding(20)
+                .opticalPlatter(cornerRadius: 14, isSelected: false)
             }
         }
     }
 
     // MARK: - Built-in items
 
-    private var systemItems: some View {
-        Section {
-            ForEach(filteredSystemItems) { item in
+    private var systemItemsCard: some View {
+        SectionGroupCard(
+            symbol: "gearshape.2.fill",
+            tone: .cyan,
+            title: tr("系统图标", "System Items"),
+            count: filteredSystemItems.count
+        ) {
+            ForEach(Array(filteredSystemItems.enumerated()), id: \.element.id) { idx, item in
+                if idx > 0 {
+                    Divider().opacity(0.32).padding(.leading, 46)
+                }
                 SystemItemRow(item: item, engine: engine)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
             }
             if query.isEmpty {
+                if !filteredSystemItems.isEmpty {
+                    Divider().opacity(0.32)
+                }
                 scanRow
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
             }
-        } header: {
-            HStack(spacing: 6) {
-                Label(tr("系统图标", "System Items"), systemImage: "gearshape.2")
-                Spacer()
-                Text("\(filteredSystemItems.count)").monospacedDigit()
-            }
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
         }
     }
 
@@ -239,12 +260,12 @@ struct SectionsSettingsView: View {
             HStack(spacing: 10) {
                 ProgressView().controlSize(.small)
                 Text(tr("正在识别 \(SystemItemName.title(for: identifier)) (\(step)/\(total))", "Calibrating \(SystemItemName.title(for: identifier)) (\(step)/\(total))"))
-                    .font(.system(size: 12))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.primary)
                 Spacer()
                 Button(tr("停止", "Stop")) { discovery.cancel() }
                     .controlSize(.small)
             }
-            .padding(.vertical, 2)
 
         default:
             HStack(spacing: 10) {
@@ -254,13 +275,12 @@ struct SectionsSettingsView: View {
                 Spacer()
                 if let summary = scanSummary {
                     Text(summary)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.primary.opacity(0.76))
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
             }
-            .padding(.vertical, 2)
         }
     }
 
@@ -307,11 +327,51 @@ struct SectionsSettingsView: View {
     }
 }
 
+// MARK: - Grouped Section Card
+
+private struct SectionGroupCard<Content: View>: View {
+    let symbol: String
+    let tone: SemanticTone
+    let title: String
+    let count: Int
+    @ViewBuilder var content: () -> Content
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let accent = BarLensPalette.ink(tone, in: colorScheme)
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 7) {
+                Image(systemName: symbol)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(accent)
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Spacer()
+                Text("\(count)")
+                    .font(.system(size: 11.5, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(accent)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(BarLensPalette.badgeFill(tone, in: colorScheme), in: Capsule())
+            }
+            .padding(.horizontal, 4)
+
+            VStack(spacing: 0) {
+                content()
+            }
+            .opticalPlatter(cornerRadius: 13, isSelected: false)
+        }
+    }
+}
+
 // MARK: - Rows
 
 private struct SystemItemRow: View {
     let item: SystemItem
     @ObservedObject var engine: DividerEngine
+    @Environment(\.colorScheme) private var colorScheme
 
     private var isClassified: Bool {
         engine.systemItems.isClassified(item)
@@ -322,11 +382,12 @@ private struct SystemItemRow: View {
             Image(systemName: item.symbol)
                 .font(.system(size: 13, weight: .medium))
                 .frame(width: 26, height: 26)
-                .foregroundStyle(.secondary)
-                .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 7))
+                .foregroundStyle(BarLensPalette.ink(.cyan, in: colorScheme))
+                .background(BarLensPalette.badgeFill(.cyan, in: colorScheme), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
 
             Text(item.title)
-                .font(.system(size: 13))
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(.primary)
 
             if engine.systemItemModes[item.identifier] == .showWhenActive && !engine.isSystemItemActive(item) {
                 BadgeTag(text: tr("启用时显示", "When Active"))
@@ -354,7 +415,7 @@ private struct SystemItemRow: View {
             .pickerStyle(.menu)
             .fixedSize()
         }
-        .padding(.vertical, 3)
+        .contentShape(Rectangle())
         .help(item.isAddressableByAssessment
               ? tr("\(item.identifier) · 编号 \(item.rawValue)", "\(item.identifier) · ID \(item.rawValue)")
               : tr("\(item.identifier) · 控制中心联动", "\(item.identifier) · Control Center Managed"))
@@ -400,11 +461,12 @@ private struct AppRow: View {
             Image(nsImage: entry.icon ?? NSImage(named: NSImage.applicationIconName)!)
                 .resizable()
                 .frame(width: 26, height: 26)
-                .opacity(entry.isRunning ? 1.0 : 0.6)
+                .opacity(entry.isRunning ? 1.0 : 0.65)
 
             HStack(spacing: 6) {
                 Text(entry.displayName)
-                    .font(.system(size: 13))
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(.primary)
                     .lineLimit(1)
 
                 if entry.itemCount > 1 {
@@ -425,7 +487,7 @@ private struct AppRow: View {
                     } label: {
                         Image(systemName: "info.circle")
                             .font(.caption)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(.primary.opacity(0.55))
                     }
                     .buttonStyle(.plain)
                     .popover(isPresented: $isShowingInfo, arrowEdge: .bottom) {
@@ -448,7 +510,7 @@ private struct AppRow: View {
                     engine.removeAssignment(for: entry.bundleID)
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.primary.opacity(0.5))
                 }
                 .buttonStyle(.plain)
                 .help(tr("移除此未运行的应用", "Remove this non-running app"))
@@ -470,7 +532,7 @@ private struct AppRow: View {
             .pickerStyle(.menu)
             .fixedSize()
         }
-        .padding(.vertical, 3)
+        .contentShape(Rectangle())
         .contextMenu {
             ForEach(engine.alwaysHiddenEnabled
                     ? [SectionModel.Section.visible, .hidden, .alwaysHidden]
@@ -504,13 +566,17 @@ private struct AppRow: View {
 
 private struct BadgeTag: View {
     let text: String
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Text(text)
             .font(.system(size: 10, weight: .medium))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 1.5)
-            .background(.quaternary, in: Capsule())
+            .foregroundStyle(.primary.opacity(0.78))
+            .padding(.horizontal, 6.5)
+            .padding(.vertical, 2)
+            .background(
+                colorScheme == .dark ? Color.white.opacity(0.11) : Color.black.opacity(0.07),
+                in: Capsule()
+            )
     }
 }

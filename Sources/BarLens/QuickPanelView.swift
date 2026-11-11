@@ -29,13 +29,14 @@ struct QuickPanelView: View {
                 sectionOverview
                 inspection
                 if let message = engine.connectionError ?? engine.lastError ?? engine.scanWarning {
+                    let warnColor = BarLensPalette.ink(.orange, in: colorScheme)
                     HStack(alignment: .center, spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.orange)
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .foregroundStyle(warnColor)
                         Text(message)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.orange)
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundStyle(.primary)
                             .lineLimit(2)
                         Spacer(minLength: 4)
                         if engine.connectionError == nil, engine.lastError != nil {
@@ -44,7 +45,7 @@ struct QuickPanelView: View {
                             } label: {
                                 Image(systemName: "xmark.circle.fill")
                                     .font(.system(size: 12))
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(.primary.opacity(0.68))
                             }
                             .buttonStyle(.plain)
                             .help(tr("关闭提示", "Dismiss"))
@@ -52,7 +53,11 @@ struct QuickPanelView: View {
                     }
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 11))
+                    .background(BarLensPalette.badgeFill(.orange, in: colorScheme), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 11, style: .continuous)
+                            .strokeBorder(warnColor.opacity(0.28), lineWidth: 0.75)
+                    }
                 }
                 assignment
             }
@@ -68,7 +73,7 @@ struct QuickPanelView: View {
             if reduceTransparency {
                 Color(nsColor: .windowBackgroundColor)
             } else {
-                (colorScheme == .dark ? Color.black : Color.white).opacity(glassOpacity)
+                BarLensPalette.windowScrim(in: colorScheme, glassOpacity: glassOpacity)
             }
         }
         .onAppear {
@@ -84,7 +89,8 @@ struct QuickPanelView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 9) {
+        let statusColor = BarLensPalette.ink(connectionTone, in: colorScheme)
+        return HStack(spacing: 9) {
             Image(nsImage: NSApp.applicationIconImage)
                 .interpolation(.high)
                 .antialiased(true)
@@ -93,18 +99,19 @@ struct QuickPanelView: View {
                 .accessibilityHidden(true)
             Text("BarLens")
                 .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .foregroundStyle(.primary)
             Spacer(minLength: 4)
             HStack(spacing: 5) {
                 if engine.isRecovering {
                     ProgressView().controlSize(.mini)
                 } else {
-                    Circle().fill(connectionColor).frame(width: 5, height: 5)
+                    Circle().fill(statusColor).frame(width: 5.5, height: 5.5)
                 }
-                Text(connectionTitle).font(.system(size: 10, weight: .medium))
+                Text(connectionTitle).font(.system(size: 10.5, weight: .semibold))
             }
-            .foregroundStyle(connectionColor)
-            .padding(.horizontal, 8).padding(.vertical, 5)
-            .background(connectionColor.opacity(0.09), in: Capsule())
+            .foregroundStyle(statusColor)
+            .padding(.horizontal, 8.5).padding(.vertical, 5)
+            .background(BarLensPalette.badgeFill(connectionTone, in: colorScheme), in: Capsule())
             .accessibilityElement(children: .combine)
         }
     }
@@ -128,18 +135,17 @@ struct QuickPanelView: View {
                 Image(systemName: symbol).symbolRenderingMode(.monochrome)
                 Text(title)
             }
-                .font(.system(size: 12, weight: selected ? .semibold : .medium))
-                .frame(maxWidth: .infinity).padding(.vertical, 8)
-                .foregroundStyle(selected ? Color.accentColor
-                                 : colorScheme == .dark ? Color.white.opacity(0.9) : Color.black.opacity(0.82))
-                .background {
-                    if selected {
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .fill(colorScheme == .dark ? Color.white.opacity(0.14) : Color.white.opacity(0.86))
-                            .shadow(color: .black.opacity(colorScheme == .dark ? 0.22 : 0.08), radius: 3, y: 1)
-                    }
+            .font(.system(size: 12, weight: selected ? .semibold : .medium))
+            .frame(maxWidth: .infinity).padding(.vertical, 8)
+            .foregroundStyle(selected ? Color.white : .primary.opacity(0.88))
+            .background {
+                if selected {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(BarLensPalette.selectionFill(in: colorScheme))
+                        .shadow(color: BarLensPalette.selectionFill(in: colorScheme).opacity(0.28), radius: 3, y: 1)
                 }
-                .contentShape(RoundedRectangle(cornerRadius: 9))
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 9))
         }
         .buttonStyle(QuickPanelButtonStyle())
         .accessibilityLabel(value == .none ? tr("收起所有隐藏分区", "Collapse Hidden Sections") : value == .hidden ? tr("展开可隐藏分区", "Reveal Hidden Section") : tr("展开全部分区", "Reveal All Sections"))
@@ -158,21 +164,24 @@ struct QuickPanelView: View {
     private func sectionCard(_ section: SectionModel.Section) -> some View {
         let selected = selectedSection == section
         let disabled = section == .alwaysHidden && !engine.alwaysHiddenEnabled
+        let accent = section.readableTint(in: colorScheme)
         return Button {
             withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.16)) { selectedSection = section }
         } label: {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(alignment: .center) {
-                    Image(systemName: section.symbol).font(.system(size: 11, weight: .medium))
+                    Image(systemName: section.symbol)
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(accent)
                     Spacer(minLength: 2)
                     Text(count(in: section), format: .number)
-                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
                         .monospacedDigit()
+                        .foregroundStyle(.primary)
                 }
-                .foregroundStyle(section.tint)
                 Text(disabled ? tr("已并入可隐藏", "Merged into Hidden") : section.title)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(selected ? .primary : .secondary)
+                    .font(.system(size: 11.5, weight: selected ? .semibold : .medium))
+                    .foregroundStyle(.primary.opacity(selected ? 1.0 : 0.78))
                     .lineLimit(1)
                     .minimumScaleFactor(0.85)
             }
@@ -187,15 +196,18 @@ struct QuickPanelView: View {
     }
 
     private var inspection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let sectionAccent = selectedSection.readableTint(in: colorScheme)
+        return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Text(selectedSection.title).font(.system(size: 12, weight: .semibold))
+                Text(selectedSection.title)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(.primary)
                 Text(sectionVisibility)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(selectedSection.tint)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 1.5)
-                    .background(selectedSection.tint.opacity(0.14), in: Capsule())
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(sectionAccent)
+                    .padding(.horizontal, 6.5)
+                    .padding(.vertical, 2)
+                    .background(BarLensPalette.badgeFill(selectedSection.tone, in: colorScheme), in: Capsule())
                 Spacer()
                 if catalog.isLoading {
                     ProgressView().controlSize(.mini)
@@ -204,11 +216,11 @@ struct QuickPanelView: View {
             if previewRows.isEmpty {
                 VStack(spacing: 7) {
                     Image(systemName: catalog.isLoading ? "ellipsis" : "tray")
-                        .font(.system(size: 18)).foregroundStyle(.tertiary)
+                        .font(.system(size: 18)).foregroundStyle(.primary.opacity(0.45))
                     Text(catalog.isLoading ? tr("正在读取…", "Loading…") : tr("暂无项目", "No items"))
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .font(.system(size: 11.5)).foregroundStyle(.primary.opacity(0.72))
                     if !catalog.isLoading {
-                        Button(tr("打开设置", "Open Settings"), action: onManage).buttonStyle(.link).font(.system(size: 11))
+                        Button(tr("打开设置", "Open Settings"), action: onManage).buttonStyle(.link).font(.system(size: 11.5))
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -224,21 +236,24 @@ struct QuickPanelView: View {
                                         .opacity(row.isRunning ? 1.0 : 0.65)
                                 } else {
                                     Image(systemName: row.symbol)
-                                        .font(.system(size: 13)).frame(width: 22, height: 22)
-                                        .foregroundStyle(selectedSection.tint)
+                                        .font(.system(size: 13, weight: .medium)).frame(width: 22, height: 22)
+                                        .foregroundStyle(sectionAccent)
                                 }
-                                Text(row.title).font(.system(size: 12)).lineLimit(1)
+                                Text(row.title)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
                                 Spacer(minLength: 6)
                                 Menu {
                                     rowMenuItems(for: row)
                                 } label: {
                                     HStack(spacing: 3) {
                                         Text(row.detail)
-                                            .font(.system(size: 10))
-                                            .foregroundStyle(.secondary)
+                                            .font(.system(size: 10.5))
+                                            .foregroundStyle(.primary.opacity(0.70))
                                         Image(systemName: "chevron.up.chevron.down")
-                                            .font(.system(size: 8))
-                                            .foregroundStyle(.tertiary)
+                                            .font(.system(size: 8.5))
+                                            .foregroundStyle(.primary.opacity(0.55))
                                     }
                                 }
                                 .menuStyle(.borderlessButton)
@@ -354,11 +369,13 @@ struct QuickPanelView: View {
                 withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.16)) { showingAssignment.toggle() }
             } label: {
                 HStack(spacing: 9) {
-                    Image(systemName: "slider.horizontal.3").foregroundStyle(.secondary)
-                    Text(tr("将圆点左侧设为", "Assign Items Left of Trigger")).font(.system(size: 12, weight: .medium))
+                    Image(systemName: "slider.horizontal.3").foregroundStyle(.primary.opacity(0.75))
+                    Text(tr("将圆点左侧设为", "Assign Items Left of Trigger"))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.primary)
                     Spacer()
                     Image(systemName: showingAssignment ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
+                        .font(.system(size: 9, weight: .semibold)).foregroundStyle(.primary.opacity(0.68))
                 }
                 .padding(11).contentShape(Rectangle())
             }
@@ -372,16 +389,26 @@ struct QuickPanelView: View {
                 .padding(.horizontal, 11).padding(.bottom, 11)
             }
         }
-        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 11))
+        .opticalPlatter(cornerRadius: 11, isSelected: false)
     }
 
     private func assignButton(_ section: SectionModel.Section) -> some View {
-        Button { onAssign(section) } label: {
-            Label(section.title, systemImage: section.symbol)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(section.tint)
-                .frame(maxWidth: .infinity).padding(.vertical, 8)
-                .background(section.tint.opacity(0.09), in: RoundedRectangle(cornerRadius: 8))
+        let accent = section.readableTint(in: colorScheme)
+        return Button { onAssign(section) } label: {
+            HStack(spacing: 5) {
+                Image(systemName: section.symbol)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(accent)
+                Text(section.title)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(.primary)
+            }
+            .frame(maxWidth: .infinity).padding(.vertical, 8)
+            .background(BarLensPalette.badgeFill(section.tone, in: colorScheme), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(accent.opacity(0.24), lineWidth: 0.75)
+            }
         }
         .buttonStyle(QuickPanelButtonStyle())
         .disabled(engine.isRecovering)
@@ -395,33 +422,34 @@ struct QuickPanelView: View {
                     HStack(spacing: 7) {
                         Image(systemName: "gearshape")
                         Text(tr("打开设置", "Settings"))
-                        Text("⌘ ,").font(.system(size: 10)).foregroundStyle(.tertiary)
+                        Text("⌘ ,").font(.system(size: 10, weight: .medium)).foregroundStyle(.primary.opacity(0.60))
                     }
                     .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.primary)
                     .padding(.vertical, 5).contentShape(Rectangle())
                 }
                 .buttonStyle(QuickPanelButtonStyle()).keyboardShortcut(",", modifiers: .command)
                 Spacer()
                 Button(action: onOpenGuide) {
-                    Image(systemName: "book.closed").font(.system(size: 12))
+                    Image(systemName: "book.closed").font(.system(size: 12, weight: .medium))
                         .frame(width: 28, height: 28).contentShape(RoundedRectangle(cornerRadius: 7))
                 }
                 .buttonStyle(QuickPanelButtonStyle())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary.opacity(0.80))
                 .help(tr("查看使用指南", "Open User Guide")).accessibilityLabel(tr("查看使用指南", "Open User Guide"))
                 Button(action: onReconnect) {
-                    Image(systemName: "arrow.clockwise").font(.system(size: 12))
+                    Image(systemName: "arrow.clockwise").font(.system(size: 12, weight: .medium))
                         .frame(width: 28, height: 28).contentShape(RoundedRectangle(cornerRadius: 7))
                 }
                 .buttonStyle(QuickPanelButtonStyle()).disabled(engine.isRecovering)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary.opacity(0.80))
                 .help(tr("重新连接菜单栏服务", "Reconnect Menu Bar Service")).accessibilityLabel(tr("重新连接菜单栏服务", "Reconnect Menu Bar Service"))
                 Button(action: onQuit) {
-                    Image(systemName: "power").font(.system(size: 12))
+                    Image(systemName: "power").font(.system(size: 12, weight: .medium))
                         .frame(width: 28, height: 28).contentShape(RoundedRectangle(cornerRadius: 7))
                 }
                 .buttonStyle(QuickPanelButtonStyle()).keyboardShortcut("q", modifiers: .command)
-                .foregroundStyle(.secondary).help(tr("退出 BarLens · ⌘Q", "Quit BarLens · ⌘Q"))
+                .foregroundStyle(.primary.opacity(0.80)).help(tr("退出 BarLens · ⌘Q", "Quit BarLens · ⌘Q"))
                 .accessibilityLabel(tr("退出 BarLens", "Quit BarLens"))
             }
         }
@@ -484,7 +512,7 @@ struct QuickPanelView: View {
         return tr("已就绪", "Ready")
     }
 
-    private var connectionColor: Color {
+    private var connectionTone: SemanticTone {
         if engine.connectionError != nil || engine.nextRetryAt != nil { return .orange }
         return engine.isRecovering ? .blue : .teal
     }

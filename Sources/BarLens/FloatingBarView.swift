@@ -313,10 +313,10 @@ struct FloatingBarView: View {
                     HStack(spacing: 7) {
                         Image(systemName: "rectangle.3.group")
                             .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.primary.opacity(0.84))
                         Text(tr("暂无隐藏图标 · 打开设置", "No Hidden Items · Open Settings"))
                             .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.primary.opacity(0.86))
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
@@ -460,6 +460,7 @@ private struct FloatingBarGearButton: View {
     let onExpandInline: () -> Void
     @State private var hovered = false
     @State private var pressed = false
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         FloatingBarCircleChrome(isActive: false, hovered: hovered, isPressed: pressed) {
@@ -575,6 +576,7 @@ private struct FloatingBarItemButton: View {
 
     @State private var hovered = false
     @State private var pressed = false
+    @Environment(\.colorScheme) private var colorScheme
 
     private var isDraggingThis: Bool {
         activeDrag?.itemID == item.id
@@ -628,7 +630,7 @@ private struct FloatingBarItemButton: View {
                             .foregroundStyle(
                                 isActive
                                     ? Color(red: 0.08, green: 0.10, blue: 0.16)
-                                    : (item.section == .alwaysHidden ? item.section.tint : .primary.opacity(0.92))
+                                    : (item.section == .alwaysHidden ? item.section.readableTint(in: colorScheme) : .primary.opacity(0.94))
                             )
                             .frame(width: 18, height: 18)
                     } else {
@@ -643,8 +645,8 @@ private struct FloatingBarItemButton: View {
                         .font(.system(size: 14.5, weight: .semibold))
                         .foregroundStyle(
                             isActive
-                                ? Color.accentColor
-                                : (item.section == .alwaysHidden ? item.section.tint : .primary)
+                                ? Color(red: 0.08, green: 0.10, blue: 0.16)
+                                : (item.section == .alwaysHidden ? item.section.readableTint(in: colorScheme) : .primary.opacity(0.94))
                         )
                         .frame(width: 22, height: 22)
                 }
@@ -654,7 +656,12 @@ private struct FloatingBarItemButton: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 3.5)
                         .padding(.vertical, 0.5)
-                        .background(item.section.tint, in: Capsule())
+                        .background(
+                            item.section == .alwaysHidden
+                                ? Color(red: 0.50, green: 0.20, blue: 0.84)
+                                : BarLensPalette.selectionFill(in: colorScheme),
+                            in: Capsule()
+                        )
                         .offset(x: 4, y: 3)
                 }
             }

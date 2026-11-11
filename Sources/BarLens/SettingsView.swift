@@ -65,7 +65,7 @@ struct SettingsView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .settingsGlass(cornerRadius: 20)
+            .windowPaneGlass(cornerRadius: 20)
         }
         .padding(12)
         .padding(.top, 28)
@@ -75,8 +75,7 @@ struct SettingsView: View {
             } else {
                 ZStack {
                     SettingsBackdrop()
-                    (colorScheme == .dark ? Color.black : Color.white)
-                        .opacity(glassOpacity * 0.55)
+                    BarLensPalette.windowScrim(in: colorScheme, glassOpacity: glassOpacity)
                 }
             }
         }
@@ -121,24 +120,28 @@ struct SettingsView: View {
 
             VStack(spacing: 5) {
                 ForEach([SettingsPane.sections, .appearance, .general, .guide, .about]) { item in
+                    let isSelected = pane == item
                     Button {
                         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
                             pane = item
                         }
                     } label: {
                         HStack(spacing: 10) {
-                            Image(systemName: item.symbol).frame(width: 20)
+                            Image(systemName: item.symbol)
+                                .font(.system(size: 13.5, weight: isSelected ? .semibold : .medium))
+                                .foregroundStyle(isSelected ? BarLensPalette.ink(.blue, in: colorScheme) : .primary.opacity(0.76))
+                                .frame(width: 20)
                             Text(item.title)
+                                .foregroundStyle(.primary)
                             Spacer(minLength: 0)
                         }
-                        .font(.system(size: 13, weight: pane == item ? .semibold : .regular))
+                        .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
                         .padding(.horizontal, 12).padding(.vertical, 10)
-                        .foregroundStyle(pane == item ? Color.accentColor : .primary)
-                        .opticalPlatter(cornerRadius: 11, isSelected: pane == item, tint: .accentColor)
+                        .opticalPlatter(cornerRadius: 11, isSelected: isSelected, tint: .accentColor)
                         .contentShape(RoundedRectangle(cornerRadius: 11))
                     }
                     .buttonStyle(.plain)
-                    .accessibilityAddTraits(pane == item ? .isSelected : [])
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
                 }
             }
             Spacer(minLength: 24)
@@ -146,13 +149,13 @@ struct SettingsView: View {
                 Circle().fill(connectionTint).frame(width: 6, height: 6)
                 Text(connectionTitle)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.primary.opacity(0.84))
                     .lineLimit(1)
                 Spacer(minLength: 0)
                 Button { engine.recoverConnection() } label: {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.primary.opacity(0.75))
                 }
                 .buttonStyle(.plain)
                 .disabled(engine.isRecovering)
@@ -165,7 +168,7 @@ struct SettingsView: View {
         }
         .padding(12)
         .frame(width: 180)
-        .settingsGlass(cornerRadius: 20)
+        .windowPaneGlass(cornerRadius: 20)
     }
 
     private var connectionTitle: String {
@@ -176,8 +179,8 @@ struct SettingsView: View {
     }
 
     private var connectionTint: Color {
-        if engine.connectionError != nil { return .orange }
-        return engine.isRecovering ? .blue : .teal
+        if engine.connectionError != nil { return BarLensPalette.ink(.orange, in: colorScheme) }
+        return engine.isRecovering ? BarLensPalette.ink(.blue, in: colorScheme) : BarLensPalette.ink(.teal, in: colorScheme)
     }
 
     private var paneHeader: some View {
@@ -201,7 +204,7 @@ struct Banners: View {
 
     var body: some View {
         if let error = engine.connectionError {
-            Banner(symbol: "arrow.triangle.2.circlepath", tint: .orange,
+            Banner(symbol: "arrow.triangle.2.circlepath", tone: .orange,
                    title: error) {
                 Button(tr("重新连接", "Reconnect")) { engine.recoverConnection() }
                     .controlSize(.small)
@@ -210,7 +213,7 @@ struct Banners: View {
         }
         if !engine.isInstalledCorrectly {
             Banner(symbol: "exclamationmark.triangle.fill",
-                   tint: .orange,
+                   tone: .orange,
                    title: tr("请移至「应用程序」文件夹后重新打开", "Move BarLens to /Applications and reopen")) {
                 Button(tr("在访达中显示", "Show in Finder")) {
                     NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
@@ -220,7 +223,7 @@ struct Banners: View {
         }
         if !engine.hasAccessibility {
             Banner(symbol: "hand.raised.fill",
-                   tint: .accentColor,
+                   tone: .blue,
                    title: tr("需要辅助功能权限", "Accessibility Permission Required")) {
                 Button(tr("打开系统设置", "Open System Settings")) {
                     engine.requestAccessibility()
@@ -232,7 +235,7 @@ struct Banners: View {
         }
         if let message = engine.lastError, engine.connectionError == nil {
             Banner(symbol: "info.circle.fill",
-                   tint: .orange,
+                   tone: .orange,
                    title: message) {
                 Button(tr("知道了", "Dismiss")) { engine.clearLastError() }
                     .controlSize(.small)
@@ -243,18 +246,21 @@ struct Banners: View {
 
 struct Banner<Actions: View>: View {
     let symbol: String
-    let tint: Color
+    let tone: SemanticTone
     let title: String
     @ViewBuilder var actions: () -> Actions
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
+        let accent = BarLensPalette.ink(tone, in: colorScheme)
         HStack(spacing: 10) {
             Image(systemName: symbol)
-                .foregroundStyle(tint)
-                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(accent)
+                .font(.system(size: 14, weight: .semibold))
                 .frame(width: 18)
             Text(title)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(.primary)
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 8)
@@ -262,7 +268,11 @@ struct Banner<Actions: View>: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 11))
+        .background(BarLensPalette.badgeFill(tone, in: colorScheme), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .strokeBorder(accent.opacity(0.28), lineWidth: 0.8)
+        }
         .padding(.horizontal, 20)
         .padding(.bottom, 8)
     }

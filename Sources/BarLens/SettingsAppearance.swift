@@ -254,11 +254,14 @@ private struct SettingsGlass: ViewModifier {
     private var tintColor: Color {
         if colorScheme == .dark {
             // Deep smoked optical slate responsive to `glassOpacity` (玻璃浓度)
-            return Color(red: 0.08, green: 0.09, blue: 0.13).opacity(min(0.94, glassOpacity * 1.18))
+            // with a contrast floor so white glyphs stay crisp even over bright windows.
+            return Color(red: 0.08, green: 0.09, blue: 0.13)
+                .opacity(min(0.94, max(0.54, glassOpacity * 1.30)))
         } else {
-            // Cool ice-crystal tint so the white 135° Fresnel specular rim stands out
-            // even when floating over a pure white (#FFFFFF) window.
-            return Color(red: 0.87, green: 0.91, blue: 0.97).opacity(min(0.92, glassOpacity * 1.12))
+            // Cool ice-crystal tint so dark glyphs and the 135° Fresnel specular rim
+            // stand out cleanly over both dark and pure white (#FFFFFF) windows.
+            return Color(red: 0.89, green: 0.92, blue: 0.98)
+                .opacity(min(0.94, max(0.52, glassOpacity * 1.25)))
         }
     }
 
@@ -283,6 +286,73 @@ private struct SettingsGlass: ViewModifier {
     }
 }
 
+/// Elevated glass surface for reading-heavy window panes (Settings & Onboarding).
+/// Unlike `SettingsGlass` (which uses a behind-window `NSVisualEffectView` for the
+/// standalone Floating Bar), this layers *above* the window's grounded scrim instead
+/// of punching through to bright desktop windows behind `NSWindow`.
+private struct WindowPaneGlass: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorScheme) private var colorScheme
+    var cornerRadius: CGFloat
+
+    @ViewBuilder func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        if reduceTransparency {
+            content.background(Color(nsColor: .controlBackgroundColor), in: shape)
+        } else {
+            content
+                .background {
+                    ZStack {
+                        shape.fill(
+                            colorScheme == .dark
+                                ? Color(red: 0.10, green: 0.11, blue: 0.15).opacity(0.90)
+                                : Color.white.opacity(0.88)
+                        )
+                        OpticalLensSheen(cornerRadius: cornerRadius)
+                    }
+                    .clipShape(shape)
+                }
+                .overlay {
+                    LiquidGlassRim(cornerRadius: cornerRadius, intensity: 0.72)
+                }
+        }
+    }
+}
+
+/// In-window refractive capsule preview used on the Appearance live preview stage
+/// so the sample capsule blurs the simulated desktop backdrop directly behind it.
+private struct PreviewCapsuleGlass: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    @AppStorage("glassOpacity") private var glassOpacity: Double = 0.36
+    var cornerRadius: CGFloat
+
+    private var tintColor: Color {
+        if colorScheme == .dark {
+            return Color(red: 0.08, green: 0.09, blue: 0.13)
+                .opacity(min(0.94, max(0.54, glassOpacity * 1.30)))
+        } else {
+            return Color(red: 0.89, green: 0.92, blue: 0.98)
+                .opacity(min(0.94, max(0.52, glassOpacity * 1.25)))
+        }
+    }
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        content
+            .background {
+                ZStack {
+                    shape.fill(.ultraThinMaterial)
+                    shape.fill(tintColor)
+                    OpticalLensSheen(cornerRadius: cornerRadius)
+                }
+                .clipShape(shape)
+            }
+            .overlay {
+                LiquidGlassRim(cornerRadius: cornerRadius)
+            }
+    }
+}
+
 private struct OpticalPlatter: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
     var cornerRadius: CGFloat
@@ -295,14 +365,16 @@ private struct OpticalPlatter: ViewModifier {
             .background {
                 if isSelected {
                     ZStack {
-                        if colorScheme == .light {
-                            shape.fill(Color.white.opacity(0.62))
-                        }
+                        shape.fill(
+                            colorScheme == .dark
+                                ? Color.white.opacity(0.13)
+                                : Color.white.opacity(0.88)
+                        )
                         shape.fill(
                             LinearGradient(
                                 colors: [
-                                    tint.opacity(colorScheme == .dark ? 0.24 : 0.18),
-                                    tint.opacity(colorScheme == .dark ? 0.11 : 0.08),
+                                    tint.opacity(colorScheme == .dark ? 0.22 : 0.13),
+                                    tint.opacity(colorScheme == .dark ? 0.08 : 0.04),
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -312,25 +384,35 @@ private struct OpticalPlatter: ViewModifier {
                 } else {
                     shape.fill(
                         colorScheme == .dark
-                            ? Color.white.opacity(0.065)
-                            : Color.white.opacity(0.56)
+                            ? Color.white.opacity(0.06)
+                            : Color.white.opacity(0.84)
                     )
                 }
             }
             .overlay {
                 if isSelected {
-                    LiquidGlassRim(cornerRadius: cornerRadius, tint: tint, intensity: 0.95)
+                    shape.strokeBorder(
+                        LinearGradient(
+                            colors: [
+                                (colorScheme == .dark ? Color.white.opacity(0.48) : tint.opacity(0.55)),
+                                tint.opacity(colorScheme == .dark ? 0.42 : 0.30),
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1.15
+                    )
                 } else {
                     ZStack {
                         if colorScheme == .light {
-                            shape.strokeBorder(Color.black.opacity(0.05), lineWidth: 0.5)
+                            shape.strokeBorder(Color.black.opacity(0.08), lineWidth: 0.75)
                         }
                         shape.strokeBorder(
                             LinearGradient(
                                 stops: [
-                                    .init(color: Color.white.opacity(colorScheme == .dark ? 0.20 : 0.85), location: 0.0),
-                                    .init(color: Color.white.opacity(colorScheme == .dark ? 0.04 : 0.20), location: 0.5),
-                                    .init(color: Color.white.opacity(colorScheme == .dark ? 0.10 : 0.45), location: 1.0),
+                                    .init(color: Color.white.opacity(colorScheme == .dark ? 0.16 : 0.85), location: 0.0),
+                                    .init(color: Color.white.opacity(colorScheme == .dark ? 0.04 : 0.24), location: 0.5),
+                                    .init(color: Color.white.opacity(colorScheme == .dark ? 0.09 : 0.48), location: 1.0),
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -343,9 +425,82 @@ private struct OpticalPlatter: ViewModifier {
     }
 }
 
+enum SemanticTone {
+    case blue
+    case purple
+    case teal
+    case green
+    case orange
+    case indigo
+    case cyan
+    case mint
+    case pink
+    case neutral
+}
+
+enum BarLensPalette {
+    /// High-contrast adaptive foreground color guaranteed legible in both Dark and Light glass surfaces.
+    static func ink(_ tone: SemanticTone, in scheme: ColorScheme) -> Color {
+        switch (tone, scheme) {
+        case (.blue, .dark):    return Color(red: 0.54, green: 0.80, blue: 1.00)
+        case (.blue, _):        return Color(red: 0.02, green: 0.36, blue: 0.82)
+        case (.purple, .dark):  return Color(red: 0.86, green: 0.68, blue: 1.00)
+        case (.purple, _):      return Color(red: 0.46, green: 0.14, blue: 0.74)
+        case (.teal, .dark):    return Color(red: 0.42, green: 0.91, blue: 0.88)
+        case (.teal, _):        return Color(red: 0.00, green: 0.44, blue: 0.48)
+        case (.green, .dark):   return Color(red: 0.44, green: 0.93, blue: 0.60)
+        case (.green, _):       return Color(red: 0.05, green: 0.48, blue: 0.21)
+        case (.orange, .dark):  return Color(red: 1.00, green: 0.79, blue: 0.38)
+        case (.orange, _):      return Color(red: 0.72, green: 0.33, blue: 0.00)
+        case (.indigo, .dark):  return Color(red: 0.70, green: 0.72, blue: 1.00)
+        case (.indigo, _):      return Color(red: 0.25, green: 0.22, blue: 0.75)
+        case (.cyan, .dark):    return Color(red: 0.46, green: 0.88, blue: 1.00)
+        case (.cyan, _):        return Color(red: 0.00, green: 0.43, blue: 0.62)
+        case (.mint, .dark):    return Color(red: 0.46, green: 0.94, blue: 0.78)
+        case (.mint, _):        return Color(red: 0.02, green: 0.47, blue: 0.38)
+        case (.pink, .dark):    return Color(red: 1.00, green: 0.64, blue: 0.80)
+        case (.pink, _):        return Color(red: 0.72, green: 0.12, blue: 0.40)
+        case (.neutral, .dark): return Color.white.opacity(0.88)
+        case (.neutral, _):     return Color.black.opacity(0.78)
+        }
+    }
+
+    static func badgeFill(_ tone: SemanticTone, in scheme: ColorScheme) -> Color {
+        ink(tone, in: scheme).opacity(scheme == .dark ? 0.16 : 0.12)
+    }
+
+    /// High-contrast solid fill for selected pills/segments where the label is pure `.white`
+    /// (>= 5.4:1 contrast even if the user chose a bright yellow/green macOS Accent Color).
+    static func selectionFill(in scheme: ColorScheme) -> Color {
+        scheme == .dark
+            ? Color(red: 0.06, green: 0.41, blue: 0.88)
+            : Color(red: 0.04, green: 0.38, blue: 0.84)
+    }
+
+    /// Grounded window scrim behind reading-heavy windows (Settings & Onboarding)
+    /// so bright desktop windows never wash Dark Mode out into low-contrast mid-gray.
+    static func windowScrim(in scheme: ColorScheme, glassOpacity: Double) -> Color {
+        if scheme == .dark {
+            return Color(red: 0.07, green: 0.08, blue: 0.11)
+                .opacity(min(0.95, max(0.84, glassOpacity * 0.45 + 0.68)))
+        } else {
+            return Color(red: 0.94, green: 0.96, blue: 0.99)
+                .opacity(min(0.96, max(0.86, glassOpacity * 0.40 + 0.72)))
+        }
+    }
+}
+
 extension View {
     func settingsGlass(cornerRadius: CGFloat = 16) -> some View {
         modifier(SettingsGlass(cornerRadius: cornerRadius))
+    }
+
+    func windowPaneGlass(cornerRadius: CGFloat = 20) -> some View {
+        modifier(WindowPaneGlass(cornerRadius: cornerRadius))
+    }
+
+    func previewCapsuleGlass(cornerRadius: CGFloat = 25) -> some View {
+        modifier(PreviewCapsuleGlass(cornerRadius: cornerRadius))
     }
 
     func opticalPlatter(cornerRadius: CGFloat = 12, isSelected: Bool = false, tint: Color = .accentColor) -> some View {
@@ -354,11 +509,23 @@ extension View {
 }
 
 extension SectionModel.Section {
-    var tint: Color {
+    var tone: SemanticTone {
         switch self {
-        case .visible: return .teal
-        case .hidden: return .blue
+        case .visible:      return .teal
+        case .hidden:       return .blue
         case .alwaysHidden: return .purple
         }
+    }
+
+    var tint: Color {
+        switch self {
+        case .visible:      return .teal
+        case .hidden:       return .blue
+        case .alwaysHidden: return .purple
+        }
+    }
+
+    func readableTint(in scheme: ColorScheme) -> Color {
+        BarLensPalette.ink(tone, in: scheme)
     }
 }

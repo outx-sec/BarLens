@@ -23,6 +23,7 @@ private struct AppearancePreset: Identifiable {
     let subtitleZh: String
     let subtitleEn: String
     let symbol: String
+    let tone: SemanticTone
     let tint: Color
     let mode: AppearanceMode?
     let opacity: Double
@@ -39,6 +40,7 @@ private struct AppearancePreset: Identifiable {
             subtitleZh: "推荐 · 兼顾深浅背景对比度与 135° 折射立体感",
             subtitleEn: "Recommended · Balanced contrast & 135° Fresnel refraction",
             symbol: "sparkles",
+            tone: .cyan,
             tint: .cyan,
             mode: nil,
             opacity: 0.36,
@@ -51,6 +53,7 @@ private struct AppearancePreset: Identifiable {
             subtitleZh: "深色烟熏高对比玻璃，契合深色顶部菜单栏",
             subtitleEn: "Smoked dark-tinted glass tailored for dark menu bars",
             symbol: "moon.stars.fill",
+            tone: .indigo,
             tint: .indigo,
             mode: .dark,
             opacity: 0.46,
@@ -63,6 +66,7 @@ private struct AppearancePreset: Identifiable {
             subtitleZh: "低底色浓度 + 强折射亮边，通透轻盈",
             subtitleEn: "Airy low-density tint with vivid specular rim highlights",
             symbol: "drop.degreesign.fill",
+            tone: .mint,
             tint: .mint,
             mode: nil,
             opacity: 0.22,
@@ -108,6 +112,7 @@ struct AppearanceSettingsView: View {
                 HStack(spacing: 10) {
                     ForEach(AppearancePreset.all) { preset in
                         let selected = isPresetSelected(preset)
+                        let accent = BarLensPalette.ink(preset.tone, in: colorScheme)
                         Button {
                             if let mode = preset.mode {
                                 engine.setAppearanceMode(mode)
@@ -119,19 +124,20 @@ struct AppearanceSettingsView: View {
                                 HStack(spacing: 6) {
                                     Image(systemName: preset.symbol)
                                         .font(.system(size: 12, weight: .semibold))
-                                        .foregroundStyle(preset.tint)
+                                        .foregroundStyle(accent)
                                     Text(preset.title)
                                         .font(.system(size: 12.5, weight: .semibold))
+                                        .foregroundStyle(.primary)
                                     Spacer(minLength: 0)
                                     if selected {
                                         Image(systemName: "checkmark.circle.fill")
-                                            .font(.system(size: 12))
-                                            .foregroundStyle(preset.tint)
+                                            .font(.system(size: 12.5, weight: .semibold))
+                                            .foregroundStyle(accent)
                                     }
                                 }
                                 Text(preset.subtitle)
                                     .font(.system(size: 10.5))
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(.primary.opacity(0.75))
                                     .lineLimit(2)
                                     .multilineTextAlignment(.leading)
                             }
@@ -157,7 +163,7 @@ struct AppearanceSettingsView: View {
                         Text(mode.title).tag(mode)
                     }
                 } label: {
-                    AppearanceRowLabel(symbol: "circle.lefthalf.filled", tint: .indigo, title: tr("外观模式", "Appearance Mode"))
+                    AppearanceRowLabel(symbol: "circle.lefthalf.filled", tone: .indigo, title: tr("外观模式", "Appearance Mode"))
                 }
                 .pickerStyle(.segmented)
 
@@ -171,7 +177,7 @@ struct AppearanceSettingsView: View {
                         Label(style.title, systemImage: style.previewSymbol).tag(style)
                     }
                 } label: {
-                    AppearanceRowLabel(symbol: "record.circle", tint: .blue, title: tr("顶部触发图标", "Menu Bar Trigger Icon"))
+                    AppearanceRowLabel(symbol: "record.circle", tone: .blue, title: tr("顶部触发图标", "Menu Bar Trigger Icon"))
                 }
                 .pickerStyle(.menu)
 
@@ -189,7 +195,7 @@ struct AppearanceSettingsView: View {
                         Text(style.title).tag(style)
                     }
                 } label: {
-                    AppearanceRowLabel(symbol: "Dock.rectangle", fallbackSymbol: "menubar.dock.rectangle", tint: .cyan, title: tr("展开呈现方式", "Reveal Style"))
+                    AppearanceRowLabel(symbol: "Dock.rectangle", fallbackSymbol: "menubar.dock.rectangle", tone: .cyan, title: tr("展开呈现方式", "Reveal Style"))
                 }
                 .pickerStyle(.segmented)
 
@@ -210,7 +216,7 @@ struct AppearanceSettingsView: View {
                     } label: {
                         AppearanceRowLabel(
                             symbol: "circle.grid.cross",
-                            tint: .purple,
+                            tone: .purple,
                             title: tr("悬浮栏图标渲染", "Floating Bar Icons"),
                             subtitle: tr("仅在「悬浮菜单栏」下生效 · 单色模板或应用彩色实物图标", "Floating Bar only · Monochrome glyph or full-color app icon"),
                             isSubItem: true
@@ -232,15 +238,15 @@ struct AppearanceSettingsView: View {
                         )
                         .frame(width: 160)
                         Text("\(Int(round(engine.glassOpacity * 100)))%")
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
                             .monospacedDigit()
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.primary.opacity(0.84))
                             .frame(width: 40, alignment: .trailing)
                     }
                 } label: {
                     AppearanceRowLabel(
                         symbol: "drop.halffull",
-                        tint: .mint,
+                        tone: .mint,
                         title: tr("玻璃浓度", "Glass Density"),
                         subtitle: tr("调节透镜底色烟熏 / 冰晶浓度", "Adjust smoked / crystal tint density")
                     )
@@ -257,15 +263,15 @@ struct AppearanceSettingsView: View {
                         )
                         .frame(width: 160)
                         Text("\(Int(round(engine.rimIntensity * 100)))%")
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
                             .monospacedDigit()
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.primary.opacity(0.84))
                             .frame(width: 40, alignment: .trailing)
                     }
                 } label: {
                     AppearanceRowLabel(
                         symbol: "sparkles",
-                        tint: .cyan,
+                        tone: .cyan,
                         title: tr("折射边强度", "Refractive Rim Intensity"),
                         subtitle: tr("调节 135° 菲涅尔高光边缘与顶部焦散亮度", "Adjust 135° Fresnel specular rim & top caustic sheen")
                     )
@@ -273,8 +279,8 @@ struct AppearanceSettingsView: View {
 
                 HStack {
                     Text(tr("提示：悬浮栏开启时，拖动滑块可同步实时预览桌面顶部悬浮栏效果。", "Tip: Drag sliders while the floating bar is open to preview live on your desktop."))
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.primary.opacity(0.75))
                     Spacer()
                     Button(tr("恢复最佳默认", "Reset to Optimal")) {
                         engine.applyOptimalAppearancePreset()
@@ -332,7 +338,7 @@ struct AppearanceSettingsView: View {
                                 } else {
                                     Image(systemName: item.symbol)
                                         .font(.system(size: 14.5, weight: .semibold))
-                                        .foregroundStyle(isActive ? Color.accentColor : .primary)
+                                        .foregroundStyle(isActive ? Color(red: 0.08, green: 0.10, blue: 0.16) : .primary)
                                 }
                             }
                             .frame(width: 36, height: 36)
@@ -397,12 +403,16 @@ struct AppearanceSettingsView: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 7)
-                .settingsGlass(cornerRadius: 25)
+                .previewCapsuleGlass(cornerRadius: 25)
                 .shadow(color: .black.opacity(colorScheme == .dark ? 0.34 : 0.14), radius: 8, y: 4)
 
                 Text(tr("点按上方预览图标可测试激活高光态", "Click any preview icon above to test the active highlight state"))
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(backdrop == .white ? Color.black.opacity(0.5) : Color.white.opacity(0.78))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(
+                        backdrop == .nebula
+                            ? Color.white.opacity(0.92)
+                            : Color(red: 0.10, green: 0.13, blue: 0.22).opacity(0.84)
+                    )
             }
             .padding(.vertical, 16)
         }
@@ -471,30 +481,33 @@ struct AppearanceSettingsView: View {
 private struct AppearanceRowLabel: View {
     let symbol: String
     var fallbackSymbol: String = "sparkles"
-    let tint: Color
+    let tone: SemanticTone
     let title: String
     var subtitle: String? = nil
     var isSubItem: Bool = false
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
+        let accent = BarLensPalette.ink(tone, in: colorScheme)
         HStack(spacing: 10) {
             if isSubItem {
                 Image(systemName: "arrow.turn.down.right")
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.primary.opacity(0.55))
                     .padding(.leading, 4)
             }
             Image(systemName: NSImage(systemSymbolName: symbol, accessibilityDescription: nil) != nil ? symbol : fallbackSymbol)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(tint)
+                .foregroundStyle(accent)
                 .frame(width: 24, height: 24)
-                .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+                .background(BarLensPalette.badgeFill(tone, in: colorScheme), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
+                    .foregroundStyle(.primary)
                 if let subtitle {
                     Text(subtitle)
                         .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.primary.opacity(0.74))
                 }
             }
         }
