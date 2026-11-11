@@ -173,4 +173,23 @@ final class AXScanTests: XCTestCase {
         let onExternal = CGRect(x: 1800, y: 4, width: 22, height: 22)
         XCTAssertEqual(ItemEnumerator.display(containing: onExternal, in: screens), external)
     }
+
+    func testMenuBarEndOffsetHandlesVerticallyStackedAndNegativeOriginDisplays() {
+        let main = DisplayID(rawValue: 1, localizedName: "Built-in")
+        let upperExternal = DisplayID(rawValue: 2, localizedName: "Upper 4K")
+        let screens: [(DisplayID, CGRect)] = [
+            (main, CGRect(x: 0, y: 0, width: 1512, height: 982)),
+            (upperExternal, CGRect(x: -200, y: -1440, width: 2560, height: 1440)),
+        ]
+
+        // Frontmost app's menu bar is rendered at the top of the upper external display (y = -1436, minX = -200..maxX = 320).
+        // Horizontal X overlaps `main` (0..1512), so matching must check both X and menu-bar-top Y band.
+        let upperMenuItems = [
+            CGRect(x: -188, y: -1436, width: 28, height: 24),
+            CGRect(x: -150, y: -1436, width: 92, height: 24),
+            CGRect(x: 240, y: -1436, width: 80, height: 24), // maxX = 320 -> offset from -200 is 520pt!
+        ]
+        let measured = ItemEnumerator.measureMenuBarEndOffset(itemFrames: upperMenuItems, in: screens)
+        XCTAssertEqual(measured ?? 0, 520, accuracy: 0.5)
+    }
 }

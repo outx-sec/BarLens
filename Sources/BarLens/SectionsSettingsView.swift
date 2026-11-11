@@ -388,6 +388,9 @@ private struct SystemItemRow: View {
             Text(item.title)
                 .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .layoutPriority(1)
 
             if engine.systemItemModes[item.identifier] == .showWhenActive && !engine.isSystemItemActive(item) {
                 BadgeTag(text: tr("启用时显示", "When Active"))
@@ -400,7 +403,7 @@ private struct SystemItemRow: View {
             if engine.lensTelemetryEnabled {
                 let sysTelemetry = engine.telemetry(for: item)
                 if let chip = sysTelemetry.shortChip {
-                    BadgeTag(text: chip, tone: .cyan)
+                    BadgeTag(text: chip, tone: .cyan, maxWidth: 148)
                 }
             }
 
@@ -475,6 +478,8 @@ private struct AppRow: View {
                     .font(.system(size: 13, weight: .regular))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
+                    .truncationMode(.tail)
+                    .layoutPriority(1)
 
                 if entry.itemCount > 1 {
                     BadgeTag(text: "×\(entry.itemCount)")
@@ -498,7 +503,7 @@ private struct AppRow: View {
                     if let unread = entry.telemetry.unreadBadge {
                         BadgeTag(text: tr("未读 \(unread)", "Unread \(unread)"), tone: .orange)
                     } else if let chip = entry.telemetry.shortChip {
-                        BadgeTag(text: chip, tone: .cyan)
+                        BadgeTag(text: chip, tone: .cyan, maxWidth: 148)
                     }
                 }
 
@@ -602,16 +607,18 @@ private struct AppRow: View {
 private struct BadgeTag: View {
     let text: String
     var tone: SemanticTone? = nil
+    var maxWidth: CGFloat? = nil
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        Text(text)
+        let label = Text(text)
             .font(.system(size: 10, weight: tone == nil ? .medium : .semibold))
             .foregroundStyle(
                 tone.map { BarLensPalette.ink($0, in: colorScheme) }
                     ?? .primary.opacity(0.78)
             )
             .lineLimit(1)
+            .truncationMode(.tail)
             .padding(.horizontal, 6.5)
             .padding(.vertical, 2)
             .background(
@@ -619,5 +626,12 @@ private struct BadgeTag: View {
                     ?? (colorScheme == .dark ? Color.white.opacity(0.11) : Color.black.opacity(0.07)),
                 in: Capsule()
             )
+        if let maxWidth {
+            label.frame(maxWidth: maxWidth, alignment: .leading)
+        } else {
+            label
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(0.8)
+        }
     }
 }

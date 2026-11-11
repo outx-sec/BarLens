@@ -267,6 +267,11 @@ final class FloatingBarController {
         panel?.isVisible == true
     }
 
+    var barCapsuleScreenFrame: NSRect? {
+        guard isShown, let panel else { return nil }
+        return panel.frame
+    }
+
     var panelScreenFrame: NSRect? {
         guard isShown, let panel else { return nil }
         var combined = panel.frame
@@ -398,9 +403,17 @@ final class FloatingBarController {
         let clampedX = min(max(desiredX, minX), max(minX, maxX))
         let pointerOffsetX = min(max(target.anchorScreenRect.midX - (clampedX + nominalPanelWidth / 2), -130), 130)
 
+        // Main capsule has 18pt bottom shadow padding; overlapping by 14pt places the Loupe card
+        // a clean 4pt beneath the main capsule while creating a continuous hover bridge!
+        let mainCapsuleBottomY = mainPanel.frame.minY + 18
+        let topY = mainCapsuleBottomY + 4 // includes Loupe's 8pt top hover-bridge padding -> visual gap = 4pt
+        let availablePanelHeight = max(220, topY - (screen.visibleFrame.minY + 8))
+        let maxBodyHeight = max(140, availablePanelHeight - 122)
+
         let loupeView = FloatingLensLoupeView(
             item: resolvedItem,
             pointerOffsetX: pointerOffsetX,
+            maxBodyHeight: maxBodyHeight,
             engine: engine,
             coordinator: loupeCoordinator
         )
@@ -420,13 +433,8 @@ final class FloatingBarController {
         loupe.contentView?.layoutSubtreeIfNeeded()
         let fitting = loupe.contentViewController?.view.fittingSize ?? NSSize(width: nominalPanelWidth, height: 140)
         let width = nominalPanelWidth
-        let height = max(84, fitting.height)
-
-        // Main capsule has 18pt bottom shadow padding; overlapping by 14pt places the Loupe card
-        // a clean 4pt beneath the main capsule while creating a continuous hover bridge!
-        let mainCapsuleBottomY = mainPanel.frame.minY + 18
-        let topY = mainCapsuleBottomY + 4 // includes Loupe's 8pt top hover-bridge padding -> visual gap = 4pt
-        let y = topY - height
+        let height = min(availablePanelHeight, max(84, fitting.height))
+        let y = max(screen.visibleFrame.minY + 6, topY - height)
         let targetFrame = NSRect(x: clampedX, y: y, width: width, height: height)
 
         if animated && loupe.isVisible {
@@ -472,8 +480,10 @@ final class FloatingBarController {
         let targetAppearance = engine.effectiveNSAppearance
         subPanel.appearance = targetAppearance
 
+        let maxSubmenuListHeight = max(140, min(320, screen.visibleFrame.height - 110))
         let flyoutView = FloatingLensSubmenuFlyoutView(
             submenu: activeSub,
+            maxListHeight: maxSubmenuListHeight,
             engine: engine,
             coordinator: loupeCoordinator
         )
@@ -872,6 +882,79 @@ struct FloatingBarView: View {
             }
     }
 
+    private var showsAlwaysHiddenToggle: Bool {
+        engine.alwaysHiddenEnabled && !alwaysHiddenItems.isEmpty
+    }
+
+    private var maxIconsViewportWidth: CGFloat {
+        let chromeReserve: CGFloat = showsAlwaysHiddenToggle ? 186 : 116
+        return max(96, maxBarWidth - chromeReserve)
+    }
+
+    private var itemsTrack: some View {
+        HStack(spacing: 7) {
+            if !tuckedOverflowItems.isEmpty {
+                let tuckedIDs = tuckedOverflowItems.map(\.id)
+                let tuckedIndexByID = Dictionary(uniqueKeysWithValues: tuckedIDs.enumerated().map { ($1, $0) })
+                ForEach(tuckedOverflowItems) { item in
+                    FloatingBarItemButton(
+                        item: item,
+                        itemIndex: tuckedIndexByID[item.id] ?? 0,
+                        siblingIDs: tuckedIDs,
+                        engine: engine,
+                        loupeCoordinator: loupeCoordinator,
+                        activeDrag: $activeDrag,
+                        activeDragTranslationX: $activeDragTranslationX,
+                        settleItemID: $settleItemID,
+                        settleOffsetX: $settleOffsetX
+                    )
+                }
+                if !hiddenItems.isEmpty || (engine.reveal == .all && !alwaysHiddenItems.isEmpty) {
+                    FloatingBarSeparator()
+                }
+            }
+
+            let hiddenIDs = hiddenItems.map(\.id)
+            let hiddenIndexByID = Dictionary(uniqueKeysWithValues: hiddenIDs.enumerated().map { ($1, $0) })
+            ForEach(hiddenItems) { item in
+                FloatingBarItemButton(
+                    item: item,
+                    itemIndex: hiddenIndexByID[item.id] ?? 0,
+                    siblingIDs: hiddenIDs,
+                    engine: engine,
+                    loupeCoordinator: loupeCoordinator,
+                    activeDrag: $activeDrag,
+                    activeDragTranslationX: $activeDragTranslationX,
+                    settleItemID: $settleItemID,
+                    settleOffsetX: $settleOffsetX
+                )
+            }
+
+            if engine.reveal == .all, !alwaysHiddenItems.isEmpty {
+                if !hiddenItems.isEmpty {
+                    FloatingBarSeparator()
+                }
+                let alwaysIDs = alwaysHiddenItems.map(\.id)
+                let alwaysIndexByID = Dictionary(uniqueKeysWithValues: alwaysIDs.enumerated().map { ($1, $0) })
+                ForEach(alwaysHiddenItems) { item in
+                    FloatingBarItemButton(
+                        item: item,
+                        itemIndex: alwaysIndexByID[item.id] ?? 0,
+                        siblingIDs: alwaysIDs,
+                        engine: engine,
+                        loupeCoordinator: loupeCoordinator,
+                        activeDrag: $activeDrag,
+                        activeDragTranslationX: $activeDragTranslationX,
+                        settleItemID: $settleItemID,
+                        settleOffsetX: $settleOffsetX
+                    )
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 2)
+    }
+
     private var barContent: some View {
         HStack(spacing: 7) {
             if !hasDisplayedItems {
@@ -889,74 +972,18 @@ struct FloatingBarView: View {
                 }
                 .buttonStyle(.plain)
             } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 7) {
-                        if !tuckedOverflowItems.isEmpty {
-                            let tuckedIDs = tuckedOverflowItems.map(\.id)
-                            let tuckedIndexByID = Dictionary(uniqueKeysWithValues: tuckedIDs.enumerated().map { ($1, $0) })
-                            ForEach(tuckedOverflowItems) { item in
-                                FloatingBarItemButton(
-                                    item: item,
-                                    itemIndex: tuckedIndexByID[item.id] ?? 0,
-                                    siblingIDs: tuckedIDs,
-                                    engine: engine,
-                                    loupeCoordinator: loupeCoordinator,
-                                    activeDrag: $activeDrag,
-                                    activeDragTranslationX: $activeDragTranslationX,
-                                    settleItemID: $settleItemID,
-                                    settleOffsetX: $settleOffsetX
-                                )
-                            }
-                            if !hiddenItems.isEmpty || (engine.reveal == .all && !alwaysHiddenItems.isEmpty) {
-                                FloatingBarSeparator()
-                            }
+                CappedProposalLayout(maxWidth: maxIconsViewportWidth) {
+                    ViewThatFits(in: .horizontal) {
+                        itemsTrack
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            itemsTrack
                         }
-
-                        let hiddenIDs = hiddenItems.map(\.id)
-                        let hiddenIndexByID = Dictionary(uniqueKeysWithValues: hiddenIDs.enumerated().map { ($1, $0) })
-                        ForEach(hiddenItems) { item in
-                            FloatingBarItemButton(
-                                item: item,
-                                itemIndex: hiddenIndexByID[item.id] ?? 0,
-                                siblingIDs: hiddenIDs,
-                                engine: engine,
-                                loupeCoordinator: loupeCoordinator,
-                                activeDrag: $activeDrag,
-                                activeDragTranslationX: $activeDragTranslationX,
-                                settleItemID: $settleItemID,
-                                settleOffsetX: $settleOffsetX
-                            )
-                        }
-
-                        if engine.reveal == .all, !alwaysHiddenItems.isEmpty {
-                            if !hiddenItems.isEmpty {
-                                FloatingBarSeparator()
-                            }
-                            let alwaysIDs = alwaysHiddenItems.map(\.id)
-                            let alwaysIndexByID = Dictionary(uniqueKeysWithValues: alwaysIDs.enumerated().map { ($1, $0) })
-                            ForEach(alwaysHiddenItems) { item in
-                                FloatingBarItemButton(
-                                    item: item,
-                                    itemIndex: alwaysIndexByID[item.id] ?? 0,
-                                    siblingIDs: alwaysIDs,
-                                    engine: engine,
-                                    loupeCoordinator: loupeCoordinator,
-                                    activeDrag: $activeDrag,
-                                    activeDragTranslationX: $activeDragTranslationX,
-                                    settleItemID: $settleItemID,
-                                    settleOffsetX: $settleOffsetX
-                                )
-                            }
-                        }
+                        .fixedSize(horizontal: false, vertical: true)
                     }
-                    .padding(.vertical, 4)
-                    .padding(.horizontal, 2)
                 }
-                .fixedSize(horizontal: true, vertical: false)
-                .frame(maxWidth: maxBarWidth - 130)
             }
 
-            if engine.alwaysHiddenEnabled && !alwaysHiddenItems.isEmpty {
+            if showsAlwaysHiddenToggle {
                 FloatingBarSeparator()
 
                 Button {
@@ -1032,6 +1059,7 @@ private struct FloatingBarSeparator: View {
 private struct FloatingLensLoupeView: View {
     let item: FloatingBarItem
     let pointerOffsetX: CGFloat
+    var maxBodyHeight: CGFloat = 560
     @ObservedObject var engine: DividerEngine
     @ObservedObject var coordinator: LensLoupeCoordinator
     @State private var copiedIPFeedback = false
@@ -1118,10 +1146,20 @@ private struct FloatingLensLoupeView: View {
         )
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            headerSection
+    private var hasMiddleBodyContent: Bool {
+        if item.telemetry.interactiveControl != nil { return true }
+        if !displayRows.isEmpty { return true }
+        if case .app = item.target {
+            return item.telemetry.statusSubItems.count > 1
+                || !item.telemetry.openWindowTitles.isEmpty
+                || !item.telemetry.tunnelActions.isEmpty
+        }
+        return false
+    }
 
+    @ViewBuilder
+    private var middleBodySections: some View {
+        VStack(alignment: .leading, spacing: 9) {
             if let control = item.telemetry.interactiveControl {
                 interactiveControlSection(control)
             }
@@ -1140,6 +1178,24 @@ private struct FloatingLensLoupeView: View {
 
             if case .app(let bundleID, _) = item.target, !item.telemetry.tunnelActions.isEmpty {
                 tunnelActionsSection(bundleID: bundleID, actions: item.telemetry.tunnelActions)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            headerSection
+
+            if hasMiddleBodyContent {
+                CappedProposalLayout(maxWidth: 278, maxHeight: maxBodyHeight) {
+                    ViewThatFits(in: .vertical) {
+                        middleBodySections
+                        ScrollView(.vertical, showsIndicators: true) {
+                            middleBodySections
+                        }
+                    }
+                }
             }
 
             Divider()
@@ -1711,6 +1767,7 @@ private struct FloatingLensLoupeView: View {
 
 private struct FloatingLensSubmenuFlyoutView: View {
     let submenu: LensLoupeCoordinator.ActiveSubmenu
+    var maxListHeight: CGFloat = 240
     @ObservedObject var engine: DividerEngine
     @ObservedObject var coordinator: LensLoupeCoordinator
     @State private var expandedThirdLevelID: String?
@@ -1733,15 +1790,12 @@ private struct FloatingLensSubmenuFlyoutView: View {
             .padding(.horizontal, 4)
 
             let children = submenu.action.children
-            let useScroll = children.count > 7
-            Group {
-                if useScroll {
+            CappedProposalLayout(maxWidth: 216, maxHeight: maxListHeight) {
+                ViewThatFits(in: .vertical) {
+                    submenuRowsList(children)
                     ScrollView(.vertical, showsIndicators: true) {
                         submenuRowsList(children)
                     }
-                    .frame(maxHeight: 236)
-                } else {
-                    submenuRowsList(children)
                 }
             }
         }
@@ -1865,6 +1919,49 @@ private struct FloatingLensSubmenuFlyoutView: View {
 }
 
 // MARK: - Universal Geometry-Driven Telemetry Layouts
+
+/// Bounds an unspecified or oversized `ProposedViewSize` along `maxWidth` and/or `maxHeight`
+/// so `ViewThatFits` inside `NSHostingController` (`sizingOptions = [.intrinsicContentSize]`)
+/// receives a real screen-bounded budget: shrinking tightly to natural size when content fits,
+/// and cleanly activating `ScrollView` at the exact cap when content exceeds the screen budget.
+struct CappedProposalLayout: Layout {
+    var maxWidth: CGFloat? = nil
+    var maxHeight: CGFloat? = nil
+
+    private func effective(_ proposal: ProposedViewSize) -> ProposedViewSize {
+        // Always propose the explicit cap on any capped axis (even during HStack/VStack 0 and .infinity
+        // flexibility probes) so minSize == idealSize == maxSize and parent stacks never invert flexibility.
+        let w: CGFloat? = if let maxWidth {
+            maxWidth
+        } else if proposal.width == 0 || proposal.width == .infinity {
+            nil
+        } else {
+            proposal.width
+        }
+        let h: CGFloat? = if let maxHeight {
+            maxHeight
+        } else if proposal.height == 0 || proposal.height == .infinity {
+            nil
+        } else {
+            proposal.height
+        }
+        return ProposedViewSize(width: w, height: h)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let first = subviews.first else { return .zero }
+        return first.sizeThatFits(effective(proposal))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let first = subviews.first else { return }
+        first.place(
+            at: CGPoint(x: bounds.minX, y: bounds.minY),
+            anchor: .topLeading,
+            proposal: ProposedViewSize(width: bounds.width, height: bounds.height)
+        )
+    }
+}
 
 /// Adaptive key-value layout that measures real CoreText/SwiftUI glyph geometry (`sizeThatFits`)
 /// rather than relying on character-count heuristics:

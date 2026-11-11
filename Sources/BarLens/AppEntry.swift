@@ -60,14 +60,31 @@ struct AppEntry: Identifiable {
     var displayName: String {
         // One item *in total*, not one named item. A second, anonymous item is
         // still an item, and the row would be lying about what it controls.
-        guard itemCount == 1, itemLabels.count == 1, let label = itemLabels.first else { return name }
+        guard itemCount == 1, itemLabels.count == 1, let rawLabel = itemLabels.first else { return name }
+        let label = rawLabel.trimmingCharacters(in: .whitespacesAndNewlines)
         guard label.count > 1, label.contains(where: \.isLetter) else { return name }
+        // Only system helper bundles (such as `com.apple.campo` whose bundle is "Siri"
+        // while its sole bar item is "Spotlight") or unnamed processes (`name == bundleID`)
+        // should promote a static item label over the bundle's localized application name.
+        // Third-party apps routinely publish live status strings ("Enhanced Mode",
+        // "Wed 4:40 PM", "↑ 1.4 MB/s") in `AXTitle` that must never replace the app's name.
+        guard bundleID.hasPrefix("com.apple.") || name == bundleID else { return name }
+        guard !Self.looksLikeLiveTelemetryLabel(label) else { return name }
         // Keep the fuller name when one contains the other: Command X's item
         // calls itself "Command", which says less than the app's name does.
         let app = name.lowercased()
         let item = label.lowercased()
         guard !app.contains(item), !item.contains(app) else { return name }
         return label
+    }
+
+    static func looksLikeLiveTelemetryLabel(_ raw: String) -> Bool {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return true }
+        if trimmed.count > 28 || trimmed.contains("\n") { return true }
+        if trimmed.contains(where: \.isNumber) { return true }
+        let telemetrySymbols = CharacterSet(charactersIn: ":：%°$¥€£↑↓←→·•|/\\≈~<>+=")
+        return trimmed.unicodeScalars.contains { telemetrySymbols.contains($0) }
     }
 
     /// The full explanation, for a tooltip.
@@ -261,21 +278,12 @@ enum AppCatalog {
             let app = running[bundleID]
             let details: AppInfo
             if let cached = info[bundleID],
-               app == nil || (cached.name != bundleID && cached.icon != nil && cached.monochromeIcon != nil) {
+               cached.name != bundleID,
+               cached.icon != nil,
+               (app == nil || cached.monochromeIcon != nil) {
                 details = cached
             } else {
-                let rawIcon = app?.icon
-                let monoIcon = AppIconGlyphExtractor.extractMonochromeGlyph(
-                    bundleURL: app?.bundleURL,
-                    appIcon: rawIcon
-                )
-                let catType = app?.bundleURL
-                    .flatMap(Bundle.init(url:))?
-                    .infoDictionary?["LSApplicationCategoryType"] as? String
-                details = AppInfo(name: app?.localizedName ?? bundleID,
-                                  icon: rawIcon,
-                                  monochromeIcon: monoIcon,
-                                  categoryType: catType)
+                details = resolveAppInfo(bundleID: bundleID, runningApp: app)
                 info[bundleID] = details
             }
             let extractedTelemetry = (app != nil)
@@ -305,8 +313,171 @@ enum AppCatalog {
         }
 
         return entries.sorted {
-            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
         }
+    }
+
+    static func enclosingApplicationBundleURL(for bundleURL: URL) -> URL? {
+        var cursor = bundleURL.standardizedFileURL.deletingLastPathComponent()
+        var outermostPath: String?
+        while cursor.path.count > 1 && cursor.path != "/" {
+            if cursor.pathExtension.lowercased() == "app" {
+                outermostPath = cursor.path
+            }
+            let next = cursor.deletingLastPathComponent()
+            if next.path == cursor.path { break }
+            cursor = next
+        }
+        return outermostPath.map { URL(fileURLWithPath: $0, isDirectory: true) }
+    }
+
+    static func preferredApplicationName(primaryName: String?,
+                                         parentAppName: String?,
+                                         bundleID: String) -> String {
+        let cleanPrimary = primaryName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let cleanParent = parentAppName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        if cleanPrimary.isEmpty || cleanPrimary == bundleID {
+            return cleanParent.isEmpty ? bundleID : cleanParent
+        }
+        guard !cleanParent.isEmpty else { return cleanPrimary }
+
+        let lowerPrimary = cleanPrimary.lowercased()
+        let lowerParent = cleanParent.lowercased()
+        if lowerPrimary.contains(".") && !cleanPrimary.contains(" ") {
+            return cleanParent
+        }
+        let words = identifierWords(cleanPrimary)
+        let singleWordHelperSuffixes: Set<String> = [
+            "helper", "agent", "launcher", "daemon", "service",
+            "loginitem", "menubarextra", "menubar", "statusitem"
+        ]
+        if let lastWord = words.last, singleWordHelperSuffixes.contains(lastWord) {
+            return cleanParent
+        }
+        let multiWordHelperSuffixes: [[String]] = [
+            ["login", "item"],
+            ["menu", "bar"],
+            ["menu", "bar", "extra"],
+            ["status", "item"]
+        ]
+        if multiWordHelperSuffixes.contains(where: { Array(words.suffix($0.count)) == $0 }) {
+            return cleanParent
+        }
+        if lowerPrimary.hasPrefix(lowerParent)
+            && words.contains(where: { singleWordHelperSuffixes.contains($0) }) {
+            return cleanParent
+        }
+        return cleanPrimary
+    }
+
+    private static func identifierWords(_ text: String) -> [String] {
+        let scalars = Array(text.unicodeScalars)
+        guard !scalars.isEmpty else { return [] }
+        var words: [String] = []
+        var current = ""
+        for index in scalars.indices {
+            let scalar = scalars[index]
+            if !CharacterSet.alphanumerics.contains(scalar) {
+                if !current.isEmpty {
+                    words.append(current.lowercased())
+                    current = ""
+                }
+                continue
+            }
+            if !current.isEmpty, CharacterSet.uppercaseLetters.contains(scalar) {
+                let prev = scalars[index - 1]
+                let prevIsLowerOrDigit = CharacterSet.lowercaseLetters.contains(prev)
+                    || CharacterSet.decimalDigits.contains(prev)
+                let nextIsLower = (index + 1 < scalars.count)
+                    && CharacterSet.lowercaseLetters.contains(scalars[index + 1])
+                if prevIsLowerOrDigit || (CharacterSet.uppercaseLetters.contains(prev) && nextIsLower) {
+                    words.append(current.lowercased())
+                    current = ""
+                }
+            }
+            current.unicodeScalars.append(scalar)
+        }
+        if !current.isEmpty {
+            words.append(current.lowercased())
+        }
+        return words
+    }
+
+    private static func localizedBundleDisplayName(for appURL: URL) -> String? {
+        if let bundle = Bundle(url: appURL) {
+            if let locDisplay = bundle.localizedInfoDictionary?["CFBundleDisplayName"] as? String,
+               !locDisplay.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return locDisplay
+            }
+            if let display = bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String,
+               !display.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return display
+            }
+            if let locName = bundle.localizedInfoDictionary?["CFBundleName"] as? String,
+               !locName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return locName
+            }
+            if let name = bundle.object(forInfoDictionaryKey: "CFBundleName") as? String,
+               !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return name
+            }
+        }
+        let raw = appURL.deletingPathExtension().lastPathComponent
+        return raw.isEmpty ? nil : raw
+    }
+
+    private static func hasCustomBundleIcon(at appURL: URL?) -> Bool {
+        guard let appURL, let bundle = Bundle(url: appURL) else { return false }
+        if let file = bundle.object(forInfoDictionaryKey: "CFBundleIconFile") as? String,
+           !file.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        if let name = bundle.object(forInfoDictionaryKey: "CFBundleIconName") as? String,
+           !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        return false
+    }
+
+    private static func resolveAppInfo(bundleID: String, runningApp: NSRunningApplication?) -> AppInfo {
+        let resolvedURL = runningApp?.bundleURL ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+        let parentAppURL = resolvedURL.flatMap { enclosingApplicationBundleURL(for: $0) }
+
+        let directName = runningApp?.localizedName ?? resolvedURL.flatMap { localizedBundleDisplayName(for: $0) }
+        let parentName = parentAppURL.flatMap { localizedBundleDisplayName(for: $0) }
+        let finalName = preferredApplicationName(
+            primaryName: directName,
+            parentAppName: parentName,
+            bundleID: bundleID
+        )
+
+        let rawIcon: NSImage?
+        if let parentAppURL, !hasCustomBundleIcon(at: resolvedURL) {
+            rawIcon = NSWorkspace.shared.icon(forFile: parentAppURL.path)
+        } else if let appIcon = runningApp?.icon {
+            rawIcon = appIcon
+        } else if let resolvedURL {
+            rawIcon = NSWorkspace.shared.icon(forFile: resolvedURL.path)
+        } else {
+            rawIcon = nil
+        }
+
+        let monoIcon = AppIconGlyphExtractor.extractMonochromeGlyph(
+            bundleURL: resolvedURL,
+            fallbackBundleURL: parentAppURL,
+            appIcon: rawIcon
+        )
+
+        let catType = (resolvedURL.flatMap(Bundle.init(url:))?.infoDictionary?["LSApplicationCategoryType"] as? String)
+            ?? (parentAppURL.flatMap(Bundle.init(url:))?.infoDictionary?["LSApplicationCategoryType"] as? String)
+
+        return AppInfo(
+            name: finalName,
+            icon: rawIcon,
+            monochromeIcon: monoIcon,
+            categoryType: catType
+        )
     }
 
     static func matches(_ entry: AppEntry, query: String) -> Bool {
@@ -324,19 +495,23 @@ enum AppCatalog {
 /// bundle resources or Dock icon without requiring Screen Recording permission.
 enum AppIconGlyphExtractor {
 
-    static func extractMonochromeGlyph(bundleURL: URL?, appIcon: NSImage?, outSize: CGFloat = 64) -> NSImage? {
-        if let bundleURL,
-           let bundle = Bundle(url: bundleURL),
-           let resURL = bundle.resourceURL,
-           let files = try? FileManager.default.contentsOfDirectory(at: resURL, includingPropertiesForKeys: nil),
-           let match = files.first(where: {
-               let name = $0.lastPathComponent.lowercased()
-               return (name.contains("template") || name.contains("statusbar") || name.contains("menubar") || name.contains("tray"))
-                   && (name.hasSuffix(".png") || name.hasSuffix(".pdf") || name.hasSuffix(".svg"))
-                   && !name.contains("picker")
-           }),
-           let img = NSImage(contentsOf: match) {
-            return renderAsTemplateAlpha(img, outSize: outSize)
+    static func extractMonochromeGlyph(bundleURL: URL?,
+                                       fallbackBundleURL: URL? = nil,
+                                       appIcon: NSImage?,
+                                       outSize: CGFloat = 64) -> NSImage? {
+        for candidateURL in [bundleURL, fallbackBundleURL].compactMap({ $0 }) {
+            if let bundle = Bundle(url: candidateURL),
+               let resURL = bundle.resourceURL,
+               let files = try? FileManager.default.contentsOfDirectory(at: resURL, includingPropertiesForKeys: nil),
+               let match = files.first(where: {
+                   let name = $0.lastPathComponent.lowercased()
+                   return (name.contains("template") || name.contains("statusbar") || name.contains("menubar") || name.contains("tray"))
+                       && (name.hasSuffix(".png") || name.hasSuffix(".pdf") || name.hasSuffix(".svg"))
+                       && !name.contains("picker")
+               }),
+               let img = NSImage(contentsOf: match) {
+                return renderAsTemplateAlpha(img, outSize: outSize)
+            }
         }
 
         guard let appIcon else { return nil }

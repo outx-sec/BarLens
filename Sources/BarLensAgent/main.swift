@@ -5,6 +5,14 @@ import DividerIPC
 // This process owns the assertion and no status items. Exiting releases every
 // restriction, including when its parent crashes or its connection gets stuck.
 func log(_ message: String) { NSLog("BarLensAgent: %@", message) }
+func agentIsEnglish() -> Bool {
+    let raw = UserDefaults(suiteName: "com.barlens.app")?.string(forKey: "appLanguage") ?? "system"
+    if raw == "en" { return true }
+    if raw == "zh-Hans" { return false }
+    let preferred = Locale.preferredLanguages.first?.lowercased() ?? "en"
+    return !preferred.hasPrefix("zh")
+}
+func agentTr(_ zh: String, _ en: String) -> String { agentIsEnglish() ? en : zh }
 let diagnostics = DiagnosticLog(source: .agent)
 diagnostics.record(event: "agent.started")
 
@@ -114,7 +122,9 @@ func tick() {
         ])
         assertion.acquire(withAllowedBundles: request.allowed,
                           hiddenSystemItems: request.hiddenSystemItems.map(NSNumber.init(value:))) { error in
-            let message = error.map { "菜单栏连接失败：\($0.localizedDescription)" }
+            let message = error.map {
+                agentTr("菜单栏连接失败：\($0.localizedDescription)", "Menu bar connection failed: \($0.localizedDescription)")
+            }
             if state.complete(token: token, error: message, now: Date()) {
                 if let message { log(message) }
                 var details = ["request": requestID,

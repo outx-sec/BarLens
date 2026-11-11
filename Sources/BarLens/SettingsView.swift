@@ -263,10 +263,12 @@ struct Banner<Actions: View>: View {
             Text(title)
                 .font(.system(size: 12.5, weight: .medium))
                 .foregroundStyle(.primary)
-                .lineLimit(1)
+                .lineLimit(2)
                 .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
             actions()
+                .fixedSize(horizontal: true, vertical: false)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)

@@ -1171,6 +1171,9 @@ final class DividerEngine: ObservableObject {
         guard appLanguage != language else { return }
         Defaults.appLanguage = language
         appLanguage = language
+        SystemTelemetryReader.shared.invalidate()
+        updateSystemAXTelemetry(from: retainedScanItems)
+        systemTelemetryRevision &+= 1
         catalogRevision += 1
         onChange?()
     }
@@ -1666,7 +1669,10 @@ final class DividerEngine: ObservableObject {
         if let targetApp {
             NSApp?.yieldActivation(to: targetApp)
         }
-        let shouldActivateTargetWindow = Self.actionLikelyOpensWindow(action.title)
+        let shouldActivateTargetWindow = Self.actionLikelyOpensWindow(
+            action.title,
+            shortcutHint: action.shortcutHint
+        )
         itemScanQueue.async { [weak self] in
             let ok = ItemEnumerator.performTunneledMenuAction(
                 bundleID: bundleID,
@@ -1692,11 +1698,23 @@ final class DividerEngine: ObservableObject {
         }
     }
 
-    private static func actionLikelyOpensWindow(_ title: String) -> Bool {
-        let lower = title.lowercased()
+    static func actionLikelyOpensWindow(_ title: String, shortcutHint: String? = nil) -> Bool {
+        if shortcutHint == "⌘," {
+            return true
+        }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Per Apple Human Interface Guidelines across every macOS locale, a trailing ellipsis
+        // on a menu command indicates that choosing the item opens a window or dialog.
+        if trimmed.hasSuffix("…") || trimmed.hasSuffix("...") {
+            return true
+        }
+        let lower = trimmed.lowercased()
         let markers = [
-            "open", "打开", "show", "显示", "settings", "preferences",
-            "设置", "首选项", "偏好", "window", "窗口", "dashboard", "面板", "控制台", "new ", "新建"
+            "open", "打开", "開啟", "開く",
+            "show", "显示", "顯示", "表示",
+            "settings", "preferences", "设置", "首选项", "偏好", "設定", "環境設定",
+            "window", "窗口", "視窗", "ウィンドウ",
+            "dashboard", "面板", "控制台", "new ", "新建", "新增"
         ]
         return markers.contains { lower.contains($0) }
     }

@@ -226,7 +226,9 @@ enum SystemItemName {
 
 /// Limits of what this API can address.
 enum SystemItemCaveats {
-    static let explanation = "部分系统图标通过控制中心与状态栏联动控制。"
+    static var explanation: String {
+        tr("部分系统图标通过控制中心与状态栏联动控制。", "Some system items are managed jointly with Control Center.")
+    }
 }
 
 /// Which raw value each built-in item has, and which section the user put it in.

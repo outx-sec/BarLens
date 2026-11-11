@@ -21,7 +21,9 @@ enum LaunchAtLogin {
 
     /// Returns nil on success, or a description of what went wrong.
     static func setEnabled(_ enabled: Bool) -> String? {
-        guard isSupported else { return "Not running from an app bundle." }
+        guard isSupported else {
+            return tr("当前未从 .app 应用包运行。", "Not running from an app bundle.")
+        }
         do {
             if enabled {
                 try SMAppService.mainApp.register()

@@ -349,7 +349,7 @@ enum SemanticLensExtractor {
                     }
                 }
 
-                if isIgnoredMenuBoilerplate(title, appName: appName) {
+                if isIgnoredMenuBoilerplate(title, shortcutHint: entry.shortcutHint, appName: appName) {
                     continue
                 }
                 let actionKey = title.lowercased()
@@ -373,7 +373,7 @@ enum SemanticLensExtractor {
                     shortcutHint: entry.shortcutHint,
                     children: convertedChildren
                 )
-                if isSecondaryPreferencesAction(title) {
+                if isSecondaryPreferencesAction(title, shortcutHint: entry.shortcutHint) {
                     secondaryActions.append(action)
                 } else {
                     primaryActions.append(action)
@@ -661,14 +661,17 @@ enum SemanticLensExtractor {
         let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         let warningMarkers = [
             "error", "failed", "disconnected", "offline", "warning", "expired",
-            "timeout", "unhealthy", "muted", "异常", "错误", "失败", "断开", "离线", "告警", "过期", "超时", "静音"
+            "timeout", "unhealthy", "muted",
+            "异常", "错误", "失败", "断开", "离线", "告警", "过期", "超时", "静音",
+            "異常", "錯誤", "失敗", "斷開", "離線", "警告", "過期", "逾時", "靜音"
         ]
         if warningMarkers.contains(where: { lower.contains($0) }) {
             return .warning
         }
         let neutralMarkers = [
             "disabled", "standby", "paused", "stopped", "no active",
-            "未连接", "暂无", "已关闭", "已暂停", "已停止", "待机", "空闲"
+            "未连接", "暂无", "已关闭", "已暂停", "已停止", "待机", "空闲",
+            "未連線", "暫無", "已關閉", "已暫停", "已停止", "待機", "閒置"
         ]
         if lower == "off" || lower == "idle" || lower == "none"
             || neutralMarkers.contains(where: { lower.contains($0) }) {
@@ -676,7 +679,8 @@ enum SemanticLensExtractor {
         }
         let activeMarkers = [
             "running", "connected", "online", "healthy", "synced", "up to date", "charging",
-            "运行中", "已连接", "已开启", "在线", "已同步", "充电", "正常"
+            "运行中", "已连接", "已开启", "在线", "已同步", "充电", "正常",
+            "執行中", "已連線", "已開啟", "線上", "已同步", "充電"
         ]
         if lower == "on" || lower == "enabled" || lower == "active"
             || activeMarkers.contains(where: { lower.contains($0) }) {
@@ -699,27 +703,50 @@ enum SemanticLensExtractor {
         return false
     }
 
-    private static func isIgnoredMenuBoilerplate(_ title: String, appName: String) -> Bool {
+    private static func isIgnoredMenuBoilerplate(_ title: String,
+                                                 shortcutHint: String?,
+                                                 appName: String) -> Bool {
+        // Universal macOS Human Interface Guidelines standard shortcuts across all OS locales:
+        // ⌘Q = Quit App, ⌘H = Hide App, ⌥⌘H = Hide Others.
+        if let shortcut = shortcutHint {
+            if shortcut == "⌘Q" || shortcut == "⌘H" || shortcut == "⌥⌘H" {
+                return true
+            }
+        }
+
         let lower = title.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowerApp = appName.lowercased()
         let exactPrefixes = [
-            "quit", "退出", "about", "关于", "check for update", "检查更新",
-            "support", "feedback", "反馈", "faq", "website", "访问网站", "官网",
-            "rate app", "share app", "more apps", "help", "帮助", "services", "服务",
-            "hide ", "隐藏 " + appName.lowercased(), "show all", "全部显示", "解锁专业版"
+            "quit", "退出", "結束", "終了", "종료", "beenden", "quitter", "salir",
+            "about", "关于", "關於", "check for update", "检查更新", "檢查更新", "アップデートを確認",
+            "support", "feedback", "反馈", "意見回饋", "faq", "website", "访问网站", "造訪網站", "官网", "官方網站",
+            "rate app", "share app", "more apps", "help", "帮助", "說明", "ヘルプ", "aide", "hilfe",
+            "services", "服务", "服務", "サービス", "dienste",
+            "hide ", "隐藏 " + lowerApp, "隱藏 " + lowerApp, "show all", "全部显示", "全部顯示", "解锁专业版", "解鎖專業版"
         ]
         if exactPrefixes.contains(where: { lower == $0 || lower.hasPrefix($0) }) {
             return true
         }
-        if lower == "quit \(appName.lowercased())" || lower == "退出 \(appName.lowercased())" || lower == "退出\(appName.lowercased())" {
+        if lower == "quit \(lowerApp)"
+            || lower == "退出 \(lowerApp)" || lower == "退出\(lowerApp)"
+            || lower == "結束 \(lowerApp)" || lower == "結束\(lowerApp)"
+            || lower.hasSuffix("を終了") || lower.hasSuffix("について") {
             return true
         }
         return false
     }
 
-    private static func isSecondaryPreferencesAction(_ title: String) -> Bool {
+    private static func isSecondaryPreferencesAction(_ title: String, shortcutHint: String?) -> Bool {
+        // Universal macOS Settings / Preferences shortcut across all locales: ⌘,
+        if shortcutHint == "⌘," {
+            return true
+        }
         let lower = title.lowercased()
         return lower.contains("settings") || lower.contains("preferences")
             || lower.contains("设置") || lower.contains("首选项") || lower.contains("偏好设置")
+            || lower.contains("設定") || lower.contains("偏好設定") || lower.contains("環境設定")
+            || lower.contains("설정") || lower.contains("einstellungen")
+            || lower.contains("réglages") || lower.contains("préférences") || lower.contains("ajustes")
     }
 
     // MARK: - Unread Counter Parsing
@@ -992,9 +1019,11 @@ final class SystemTelemetryReader {
 
     private struct CachedEntry {
         let timestamp: TimeInterval
+        let isEnglish: Bool
         let telemetry: LensTelemetry
     }
 
+    private let cacheLock = NSLock()
     private var cache: [String: CachedEntry] = [:]
     private var preMuteVolume: Float32 = 0.45
 
@@ -1003,10 +1032,16 @@ final class SystemTelemetryReader {
         f.dateFormat = "HH:mm"
         return f
     }()
-    private lazy var fullDateFormatter: DateFormatter = {
+    private lazy var englishFullDateFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: L10n.isEnglish ? "en_US" : "zh_CN")
-        f.dateFormat = L10n.isEnglish ? "EEE, MMM d · HH:mm" : "M月d日 EEEE · HH:mm"
+        f.locale = Locale(identifier: "en_US")
+        f.dateFormat = "EEE, MMM d · HH:mm"
+        return f
+    }()
+    private lazy var chineseFullDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        f.dateFormat = "M月d日 EEEE · HH:mm"
         return f
     }()
     private lazy var lunarFormatter: DateFormatter = {
@@ -1018,7 +1053,15 @@ final class SystemTelemetryReader {
         return f
     }()
 
+    func formattedFullDate(_ date: Date) -> String {
+        L10n.isEnglish
+            ? englishFullDateFormatter.string(from: date)
+            : chineseFullDateFormatter.string(from: date)
+    }
+
     func invalidate(_ canonicalIdentifier: String? = nil) {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
         if let canonicalIdentifier {
             cache.removeValue(forKey: SystemItemName.canonicalIdentifier(for: canonicalIdentifier))
         } else {
@@ -1051,8 +1094,12 @@ final class SystemTelemetryReader {
     func telemetry(for item: SystemItem, fallbackAX: LensTelemetry = .empty) -> LensTelemetry {
         let canonical = SystemItemName.canonicalIdentifier(for: item.identifier)
         let now = ProcessInfo.processInfo.systemUptime
+        let currentEnglish = L10n.isEnglish
         let itemTTL: TimeInterval = (canonical == "com.apple.menuextra.bluetooth") ? 4.0 : 1.8
-        if let hit = cache[canonical], now - hit.timestamp < itemTTL {
+        cacheLock.lock()
+        let cachedHit = cache[canonical]
+        cacheLock.unlock()
+        if let hit = cachedHit, hit.isEnglish == currentEnglish, now - hit.timestamp < itemTTL {
             return hit.telemetry
         }
 
@@ -1089,7 +1136,9 @@ final class SystemTelemetryReader {
             resolved = enrichGenericSystemItem(canonical: canonical, fallbackAX: fallbackAX)
         }
 
-        cache[canonical] = CachedEntry(timestamp: now, telemetry: resolved)
+        cacheLock.lock()
+        cache[canonical] = CachedEntry(timestamp: now, isEnglish: currentEnglish, telemetry: resolved)
+        cacheLock.unlock()
         return resolved
     }
 
@@ -1783,8 +1832,9 @@ final class SystemTelemetryReader {
             ? tr("\(days) 天 \(hours) 小时", "\(days)d \(hours)h")
             : tr("\(hours) 小时 \(mins) 分钟", "\(hours)h \(mins)m")
 
+        let formattedDate = formattedFullDate(now)
         var rows: [LensFactRow] = [
-            LensFactRow(label: tr("日期时间", "Date"), value: fullDateFormatter.string(from: now), tone: .accent)
+            LensFactRow(label: tr("日期时间", "Date"), value: formattedDate, tone: .accent)
         ]
         if !L10n.isEnglish {
             let lunar = lunarFormatter.string(from: now)
@@ -1796,7 +1846,7 @@ final class SystemTelemetryReader {
 
         return LensTelemetry(
             shortChip: clockFormatter.string(from: now),
-            fullSummary: fullDateFormatter.string(from: now),
+            fullSummary: formattedDate,
             rows: rows
         )
     }

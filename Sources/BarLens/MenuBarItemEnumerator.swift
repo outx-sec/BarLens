@@ -92,7 +92,9 @@ struct ItemScanResult {
         if !permissionGranted { return AXScanFailure.permissionDenied.description }
         if cancelled { return AXScanFailure.cancelled.description }
         if timedOut { return AXScanFailure.timedOut.description }
-        if !failedOwners.isEmpty { return "部分应用的菜单栏暂时无法读取。" }
+        if !failedOwners.isEmpty {
+            return tr("部分应用的菜单栏暂时无法读取。", "Some applications' menu bar items could not be read temporarily.")
+        }
         return nil
     }
 }
@@ -962,16 +964,32 @@ enum ItemEnumerator {
               !children.isEmpty else {
             return nil
         }
-        var maxOffsetFromLeft: CGFloat = 0
-        for child in children.prefix(24) {
+        let rects: [CGRect] = children.prefix(24).compactMap { child in
             guard let rect = try? frame(of: child, reader: reader),
+                  rect.width > 0, rect.height > 0 else { return nil }
+            return rect
+        }
+        return measureMenuBarEndOffset(itemFrames: rects, in: screens)
+    }
+
+    static func measureMenuBarEndOffset(itemFrames: [CGRect],
+                                        in screens: [(DisplayID, CGRect)]) -> CGFloat? {
+        guard !itemFrames.isEmpty, !screens.isEmpty else { return nil }
+        var maxOffsetFromLeft: CGFloat = 0
+        for rect in itemFrames {
+            guard rect.minX.isFinite, rect.minY.isFinite,
                   rect.width > 0, rect.height > 0 else { continue }
-            let midX = rect.midX
-            if let hostingScreen = screens.first(where: { midX >= $0.1.minX - 4 && midX <= $0.1.maxX + 4 }) {
-                let offset = rect.maxX - hostingScreen.1.minX
-                if offset > maxOffsetFromLeft && offset < hostingScreen.1.width {
-                    maxOffsetFromLeft = offset
-                }
+            let midpoint = CGPoint(x: rect.midX, y: rect.midY)
+            // Match both X and top-of-display Y band so vertically stacked multi-monitor
+            // setups never confuse an upper/lower external display with the main display.
+            guard let hostingScreen = screens.first(where: {
+                $0.1.insetBy(dx: -4, dy: -8).contains(midpoint) && midpoint.y <= $0.1.minY + 64
+            }) else {
+                continue
+            }
+            let offset = rect.maxX - hostingScreen.1.minX
+            if offset > maxOffsetFromLeft && offset < hostingScreen.1.width * 0.75 {
+                maxOffsetFromLeft = offset
             }
         }
         return maxOffsetFromLeft > 40 ? maxOffsetFromLeft : nil

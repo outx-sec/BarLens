@@ -439,4 +439,140 @@ final class SemanticLensTests: XCTestCase {
 
         XCTAssertGreaterThan(wrappedFacetsHeight, singleLineFacetsHeight * 1.7)
     }
+
+    func testMultiLocaleMenuShortcutsHIGEllipsisAndDynamicLanguageSwitch() {
+        // Japanese / German / custom locale menu entries using universal macOS shortcuts (⌘Q, ⌘H, ⌘,)
+        let intlEntries = [
+            AXMenuSnapshotEntry(
+                statusItemIndex: 0, menuPath: [0], titlePath: ["設定…"],
+                title: "設定…", isEnabled: true, markChar: nil, shortcutHint: "⌘,", children: []
+            ),
+            AXMenuSnapshotEntry(
+                statusItemIndex: 0, menuPath: [1], titlePath: ["ダッシュボードを開く"],
+                title: "ダッシュボードを開く", isEnabled: true, markChar: nil, shortcutHint: "⌘D", children: []
+            ),
+            AXMenuSnapshotEntry(
+                statusItemIndex: 0, menuPath: [2], titlePath: ["App を隠す"],
+                title: "App を隠す", isEnabled: true, markChar: nil, shortcutHint: "⌘H", children: []
+            ),
+            AXMenuSnapshotEntry(
+                statusItemIndex: 0, menuPath: [3], titlePath: ["App を終了"],
+                title: "App を終了", isEnabled: true, markChar: nil, shortcutHint: "⌘Q", children: []
+            ),
+        ]
+        let distilled = SemanticLensExtractor.extract(
+            appName: "SampleApp",
+            bundleID: "jp.example.sample",
+            items: [RawAXItemTelemetry(menuEntries: intlEntries)]
+        )
+        // ⌘Q and ⌘H are stripped universally; domain action precedes demoted ⌘, Settings!
+        XCTAssertEqual(distilled.tunnelActions.map(\.title), ["ダッシュボードを開く", "設定…"])
+
+        // HIG trailing ellipsis & ⌘, window-activation heuristics across locales
+        XCTAssertTrue(DividerEngine.actionLikelyOpensWindow("Einstellungen", shortcutHint: "⌘,"))
+        XCTAssertTrue(DividerEngine.actionLikelyOpensWindow("プロファイルを読み込む…"))
+        XCTAssertTrue(DividerEngine.actionLikelyOpensWindow("Import Config..."))
+        XCTAssertTrue(DividerEngine.actionLikelyOpensWindow("開啟主視窗"))
+        XCTAssertFalse(DividerEngine.actionLikelyOpensWindow("Copy Public IP"))
+        XCTAssertFalse(DividerEngine.actionLikelyOpensWindow("Pause Sync"))
+
+        // Dynamic runtime language switch updates SystemTelemetryReader date formatting & cache immediately
+        let savedLang = Defaults.appLanguage
+        defer {
+            Defaults.appLanguage = savedLang
+            SystemTelemetryReader.shared.invalidate()
+        }
+        let clockItem = SystemItem(identifier: "com.apple.menuextra.clock", rawValue: 2)
+
+        Defaults.appLanguage = .zhHans
+        let zhClock = SystemTelemetryReader.shared.telemetry(for: clockItem)
+        XCTAssertEqual(zhClock.rows.first?.label, "日期时间")
+        XCTAssertTrue(zhClock.fullSummary?.contains("月") == true)
+
+        Defaults.appLanguage = .en
+        let enClock = SystemTelemetryReader.shared.telemetry(for: clockItem)
+        XCTAssertEqual(enClock.rows.first?.label, "Date")
+        XCTAssertFalse(enClock.fullSummary?.contains("月") == true)
+    }
+
+    @MainActor
+    func testCappedProposalLayoutShrinksWhenCompactAndScrollsAtExactCapWhenOverflowing() {
+        func findScrollViews(in view: NSView) -> [NSScrollView] {
+            var found: [NSScrollView] = []
+            if let sv = view as? NSScrollView { found.append(sv) }
+            for sub in view.subviews { found.append(contentsOf: findScrollViews(in: sub)) }
+            return found
+        }
+
+        func buildCapsule(itemCount: Int, cap: CGFloat) -> some View {
+            let items = HStack(spacing: 7) {
+                ForEach(0..<itemCount, id: \.self) { _ in
+                    Rectangle().fill(Color(nsColor: .red)).frame(width: 38, height: 38)
+                }
+            }
+            return HStack(spacing: 7) {
+                CappedProposalLayout(maxWidth: cap) {
+                    ViewThatFits(in: .horizontal) {
+                        items
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            items
+                        }
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Rectangle().fill(Color(nsColor: .blue)).frame(width: 1, height: 18)
+                Rectangle().fill(Color(nsColor: .green)).frame(width: 36, height: 36)
+            }
+            .padding(10)
+            .background(Color.white)
+        }
+
+        func measureHostedCapsule(itemCount: Int, cap: CGFloat) -> (size: NSSize, scrollViews: [NSScrollView]) {
+            let hc = NSHostingController(rootView: buildCapsule(itemCount: itemCount, cap: cap))
+            hc.sizingOptions = [.intrinsicContentSize]
+            let panel = NSPanel(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
+            panel.contentViewController = hc
+            panel.contentView?.layoutSubtreeIfNeeded()
+            let fit = hc.view.fittingSize
+            panel.setFrame(NSRect(origin: .zero, size: fit), display: true)
+            panel.contentView?.layoutSubtreeIfNeeded()
+            return (fit, findScrollViews(in: hc.view))
+        }
+
+        // 1. Compact (3 items = 128pt inside a wide 2200pt screen cap):
+        // Must shrink to 128 + 7 + 1 + 7 + 36 + 20 = 199pt, mount 0 NSScrollViews,
+        // AND render all 3*38*38 = 4332 red icon pixels and 36*36 = 1296 green gear pixels in bounds!
+        let compact = measureHostedCapsule(itemCount: 3, cap: 2200)
+        XCTAssertEqual(compact.size.width, 199, accuracy: 2.0)
+        XCTAssertEqual(compact.scrollViews.count, 0)
+
+        let renderer = ImageRenderer(content: buildCapsule(itemCount: 3, cap: 2200))
+        let cgImage = try? XCTUnwrap(renderer.cgImage)
+        if let cgImage {
+            let rep = NSBitmapImageRep(cgImage: cgImage)
+            var redPixels = 0
+            var greenPixels = 0
+            for y in 0..<cgImage.height {
+                for x in 0..<cgImage.width {
+                    if let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) {
+                        if c.redComponent > 0.8 && c.greenComponent < 0.2 { redPixels += 1 }
+                        if c.greenComponent > 0.8 && c.redComponent < 0.2 { greenPixels += 1 }
+                    }
+                }
+            }
+            XCTAssertEqual(redPixels, 3 * 38 * 38)
+            XCTAssertEqual(greenPixels, 36 * 36)
+        }
+
+        // 2. Overflow (20 items = 893pt > 420pt cap):
+        // Must cap icons viewport at 420pt (total 420 + 7 + 1 + 7 + 36 + 20 = 491pt) and mount 1 NSScrollView
+        // whose documentView spans the full 893pt!
+        let overflow = measureHostedCapsule(itemCount: 20, cap: 420)
+        XCTAssertEqual(overflow.size.width, 491, accuracy: 2.0)
+        XCTAssertEqual(overflow.scrollViews.count, 1)
+        if let sv = overflow.scrollViews.first {
+            XCTAssertEqual(sv.frame.width, 420, accuracy: 2.0)
+            XCTAssertEqual(sv.documentView?.frame.width ?? 0, 893, accuracy: 2.0)
+        }
+    }
 }

@@ -87,6 +87,75 @@ final class AppCatalogSearchTests: XCTestCase {
         XCTAssertTrue(AppCatalog.matches(entry, query: "Siri"))
         XCTAssertFalse(AppCatalog.matches(entry, query: "Calendar"))
     }
+
+    func testThirdPartyLiveTelemetryNeverOverwritesApplicationDisplayName() {
+        let stats = AppEntry(bundleID: "eu.exelban.Stats", name: "Stats", icon: nil,
+                             section: .hidden, isRunning: true,
+                             itemLabels: ["↑ 1.4 MB/s ↓ 8.2 MB/s"], isLedgerOnly: false, itemCount: 1)
+        XCTAssertEqual(stats.displayName, "Stats")
+        XCTAssertTrue(AppCatalog.matches(stats, query: "8.2 MB/s"))
+
+        let dato = AppEntry(bundleID: "com.sindresorhus.Dato", name: "Dato", icon: nil,
+                            section: .hidden, isRunning: true,
+                            itemLabels: ["Wed 4:40 PM"], isLedgerOnly: false, itemCount: 1)
+        XCTAssertEqual(dato.displayName, "Dato")
+
+        let surge = AppEntry(bundleID: "com.nssurge.surge-mac", name: "Surge", icon: nil,
+                             section: .hidden, isRunning: true,
+                             itemLabels: ["Enhanced Mode"], isLedgerOnly: false, itemCount: 1)
+        XCTAssertEqual(surge.displayName, "Surge")
+
+        // Even for unnamed fallback processes, telemetry-shaped labels must not be promoted.
+        let unnamedDaemon = AppEntry(bundleID: "io.example.daemon", name: "io.example.daemon", icon: nil,
+                                     section: .hidden, isRunning: true,
+                                     itemLabels: ["CPU: 42%"], isLedgerOnly: false, itemCount: 1)
+        XCTAssertEqual(unnamedDaemon.displayName, "io.example.daemon")
+    }
+
+    func testLoginItemHelperBundleResolvesEnclosingParentAppIdentity() {
+        let loginItemURL = URL(fileURLWithPath: "/Applications/CleanShot X.app/Contents/Library/LoginItems/CleanShot X Helper.app")
+        let topLevelURL = URL(fileURLWithPath: "/Applications/Slack.app")
+
+        XCTAssertEqual(
+            AppCatalog.enclosingApplicationBundleURL(for: loginItemURL),
+            URL(fileURLWithPath: "/Applications/CleanShot X.app", isDirectory: true)
+        )
+        XCTAssertNil(AppCatalog.enclosingApplicationBundleURL(for: topLevelURL))
+
+        XCTAssertEqual(
+            AppCatalog.preferredApplicationName(
+                primaryName: "CleanShot X Helper",
+                parentAppName: "CleanShot X",
+                bundleID: "pl.maketheweb.cleanshotx.helper"
+            ),
+            "CleanShot X"
+        )
+        XCTAssertEqual(
+            AppCatalog.preferredApplicationName(
+                primaryName: "pl.maketheweb.cleanshotx.helper",
+                parentAppName: "CleanShot X",
+                bundleID: "pl.maketheweb.cleanshotx.helper"
+            ),
+            "CleanShot X"
+        )
+        XCTAssertEqual(
+            AppCatalog.preferredApplicationName(
+                primaryName: "MenuBarLauncher",
+                parentAppName: "Amphetamine",
+                bundleID: "com.if.Amphetamine.Launcher"
+            ),
+            "Amphetamine"
+        )
+        // Independent nested apps (e.g. Simulator inside Xcode.app) keep their own product name.
+        XCTAssertEqual(
+            AppCatalog.preferredApplicationName(
+                primaryName: "Simulator",
+                parentAppName: "Xcode",
+                bundleID: "com.apple.iphonesimulator"
+            ),
+            "Simulator"
+        )
+    }
 }
 
 final class SystemItemModelTests: XCTestCase {

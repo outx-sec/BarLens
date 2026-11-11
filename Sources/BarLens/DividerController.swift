@@ -215,7 +215,7 @@ final class DividerController: NSObject, NSPopoverDelegate {
         guard abs(event.timestamp - lastHandledScrollTimestamp) > 0.002 else { return false }
         let mouse = NSEvent.mouseLocation
         let overDot = isMouseOverDot(at: mouse)
-        let overFloatingBar = !overDot && (floatingBar.panelScreenFrame?.contains(mouse) == true)
+        let overFloatingBar = !overDot && (floatingBar.barCapsuleScreenFrame?.contains(mouse) == true)
         guard overDot || overFloatingBar else { return false }
 
         if event.type == .swipe {
