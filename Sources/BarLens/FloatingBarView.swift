@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Borderless panel that does not let AppKit clamp `frame.maxY` to `visibleFrame.maxY`,
 /// allowing the capsule's top shadow padding to overlap the menu bar bottom edge
@@ -199,6 +200,8 @@ struct FloatingBarView: View {
     let onOpenSettings: () -> Void
     let onExpandInline: () -> Void
 
+    @State private var draggedItemID: String?
+
     private var hiddenItems: [FloatingBarItem] {
         items(in: .hidden)
     }
@@ -244,7 +247,7 @@ struct FloatingBarView: View {
                     target: .system(sys, isClassified: engine.systemItems.isClassified(sys))
                 )
             }
-        return appItems + sysItems
+        return engine.floatingBarOrder.sorted(appItems + sysItems, id: \.id)
     }
 
     @Environment(\.colorScheme) private var colorScheme
@@ -279,16 +282,28 @@ struct FloatingBarView: View {
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 7) {
+                        let hiddenIDs = hiddenItems.map(\.id)
                         ForEach(hiddenItems) { item in
-                            FloatingBarItemButton(item: item, engine: engine)
+                            FloatingBarItemButton(
+                                item: item,
+                                siblingIDs: hiddenIDs,
+                                engine: engine,
+                                draggedItemID: $draggedItemID
+                            )
                         }
 
                         if engine.reveal == .all, !alwaysHiddenItems.isEmpty {
                             if !hiddenItems.isEmpty {
                                 FloatingBarSeparator()
                             }
+                            let alwaysIDs = alwaysHiddenItems.map(\.id)
                             ForEach(alwaysHiddenItems) { item in
-                                FloatingBarItemButton(item: item, engine: engine)
+                                FloatingBarItemButton(
+                                    item: item,
+                                    siblingIDs: alwaysIDs,
+                                    engine: engine,
+                                    draggedItemID: $draggedItemID
+                                )
                             }
                         }
                     }
@@ -375,6 +390,16 @@ struct FloatingBarView: View {
                         }
                     }
                 }
+                if !engine.floatingBarOrder.isEmpty {
+                    Divider()
+                    Button {
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            engine.resetFloatingBarOrder()
+                        }
+                    } label: {
+                        Label(tr("重置图标排序", "Reset Icon Order"), systemImage: "arrow.counterclockwise")
+                    }
+                }
                 Divider()
                 Button(tr("打开设置…", "Open Settings…"), action: onOpenSettings)
             }
@@ -432,7 +457,9 @@ private struct FloatingBarItem: Identifiable {
 
 private struct FloatingBarItemButton: View {
     let item: FloatingBarItem
+    let siblingIDs: [String]
     @ObservedObject var engine: DividerEngine
+    @Binding var draggedItemID: String?
 
     private var isActive: Bool {
         switch item.target {
@@ -497,7 +524,21 @@ private struct FloatingBarItemButton: View {
             .contentShape(Circle())
         }
         .buttonStyle(FloatingBarIconStyle(isActive: isActive))
-        .help(tr("\(item.title) · 点按打开 / 收起菜单", "\(item.title) · Click to toggle menu"))
+        .opacity(draggedItemID == item.id ? 0.55 : 1.0)
+        .onDrag {
+            draggedItemID = item.id
+            return NSItemProvider(object: item.id as NSString)
+        }
+        .onDrop(
+            of: [UTType.plainText],
+            delegate: FloatingBarDropDelegate(
+                targetID: item.id,
+                siblingIDs: siblingIDs,
+                engine: engine,
+                draggedItemID: $draggedItemID
+            )
+        )
+        .help(tr("\(item.title) · 点按打开菜单 · 拖拽可调整顺序", "\(item.title) · Click to toggle menu · Drag to reorder"))
         .contextMenu {
             let choices: [SectionModel.Section] = engine.alwaysHiddenEnabled
                 ? [.visible, .hidden, .alwaysHidden]
@@ -514,7 +555,64 @@ private struct FloatingBarItemButton: View {
                     Label(section.title, systemImage: section.symbol)
                 }
             }
+            if siblingIDs.count > 1 {
+                Divider()
+                if siblingIDs.first != item.id {
+                    Button {
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            engine.moveFloatingBarItemToEdge(item.id, toFront: true, within: siblingIDs)
+                        }
+                    } label: {
+                        Label(tr("移至最前", "Move to Front"), systemImage: "arrow.left.to.line")
+                    }
+                }
+                if siblingIDs.last != item.id {
+                    Button {
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            engine.moveFloatingBarItemToEdge(item.id, toFront: false, within: siblingIDs)
+                        }
+                    } label: {
+                        Label(tr("移至最后", "Move to End"), systemImage: "arrow.right.to.line")
+                    }
+                }
+            }
+            if !engine.floatingBarOrder.isEmpty {
+                Divider()
+                Button {
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        engine.resetFloatingBarOrder()
+                    }
+                } label: {
+                    Label(tr("重置图标排序", "Reset Icon Order"), systemImage: "arrow.counterclockwise")
+                }
+            }
         }
+    }
+}
+
+private struct FloatingBarDropDelegate: DropDelegate {
+    let targetID: String
+    let siblingIDs: [String]
+    let engine: DividerEngine
+    @Binding var draggedItemID: String?
+
+    func dropEntered(info: DropInfo) {
+        guard let draggedID = draggedItemID,
+              draggedID != targetID,
+              siblingIDs.contains(draggedID),
+              siblingIDs.contains(targetID) else { return }
+        withAnimation(.spring(response: 0.24, dampingFraction: 0.82)) {
+            engine.moveFloatingBarItem(draggedID, to: targetID, within: siblingIDs)
+        }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        draggedItemID = nil
+        return true
     }
 }
 

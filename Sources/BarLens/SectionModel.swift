@@ -178,6 +178,21 @@ struct SectionModel {
         save()
     }
 
+    mutating func replaceAll(visible newVisible: Set<String>,
+                             hidden newHidden: Set<String>,
+                             alwaysHidden newAlwaysHidden: Set<String>,
+                             unclassified newUnclassified: Section,
+                             persist: Bool = true) {
+        let validAlwaysHidden = newAlwaysHidden.subtracting(Self.notClassifiable)
+        let validHidden = newHidden.subtracting(Self.notClassifiable).subtracting(validAlwaysHidden)
+        let validVisible = newVisible.subtracting(Self.notClassifiable).subtracting(validAlwaysHidden).subtracting(validHidden)
+        alwaysHidden = validAlwaysHidden
+        hidden = validHidden
+        visible = validVisible
+        unclassified = newUnclassified
+        if persist { save() }
+    }
+
     // MARK: - Bulk assignment from the dot's position
 
     enum BulkError: Error, CustomStringConvertible {
@@ -305,5 +320,51 @@ struct SectionModel {
         // Stable order also keeps an unchanged rule from looking like a new
         // command to the helper after a running-application refresh.
         return allowed.sorted()
+    }
+}
+
+/// Portable, versioned snapshot of a user's BarLens configuration.
+struct BarLensProfile: Codable, Equatable {
+    static let currentSchemaVersion = 1
+
+    var schemaVersion: Int = Self.currentSchemaVersion
+    var visibleBundles: [String]
+    var hiddenBundles: [String]
+    var alwaysHiddenBundles: [String]
+    var systemItemAssignments: [String: String]
+    var floatingBarOrder: [String]
+    var alwaysHiddenEnabled: Bool
+    var unclassifiedSection: String
+    var newSystemItemSection: String
+    var appearanceMode: String
+    var revealPresentationStyle: String
+    var floatingBarIconStyle: String
+    var statusBarIconStyle: String
+    var glassOpacity: Double
+    var rimIntensity: Double
+    var autoRehideInterval: Int
+    var hoverRevealDelay: Int
+    var appLanguage: String
+    var hotkeys: [String: Hotkey]
+
+    func encodedJSON() throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try encoder.encode(self)
+    }
+
+    static func decode(from data: Data) throws -> BarLensProfile {
+        var profile = try JSONDecoder().decode(BarLensProfile.self, from: data)
+        profile.glassOpacity = min(max(profile.glassOpacity, 0.08), 0.75)
+        profile.rimIntensity = min(max(profile.rimIntensity, 0.40), 1.50)
+        profile.visibleBundles = profile.visibleBundles.filter { !SectionModel.notClassifiable.contains($0) }
+        profile.hiddenBundles = profile.hiddenBundles.filter { !SectionModel.notClassifiable.contains($0) }
+        profile.alwaysHiddenBundles = profile.alwaysHiddenBundles.filter { !SectionModel.notClassifiable.contains($0) }
+        var normalizedSystem: [String: String] = [:]
+        for (key, value) in profile.systemItemAssignments where SectionModel.Section(rawValue: value) != nil {
+            normalizedSystem[SystemItemName.canonicalIdentifier(for: key)] = value
+        }
+        profile.systemItemAssignments = normalizedSystem
+        return profile
     }
 }

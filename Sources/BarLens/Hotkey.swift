@@ -11,6 +11,12 @@ struct Hotkey: Codable, Equatable {
     var carbonModifiers: UInt32
     var display: String
 
+    init(keyCode: UInt32, carbonModifiers: UInt32, display: String) {
+        self.keyCode = keyCode
+        self.carbonModifiers = carbonModifiers
+        self.display = display
+    }
+
     /// A shortcut with no modifier would swallow an ordinary keystroke, so the
     /// recorder refuses to produce one.
     static let requiredModifiers: NSEvent.ModifierFlags = [.command, .option, .control]

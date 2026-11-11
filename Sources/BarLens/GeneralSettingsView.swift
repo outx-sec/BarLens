@@ -1,9 +1,12 @@
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct GeneralSettingsView: View {
 
     @ObservedObject var engine: DividerEngine
     @ObservedObject var catalog: Catalog
+    @State private var profileNotice: String?
 
     var body: some View {
         Form {
@@ -21,6 +24,17 @@ struct GeneralSettingsView: View {
                     PreferenceLabel(symbol: "eye.slash.fill", tint: .indigo, title: tr("启用「永久隐藏」", "Enable “Always Hidden” Section"))
                 }
                 .toggleStyle(.switch)
+
+                Picker(selection: Binding(
+                    get: { engine.hoverRevealDelay },
+                    set: { engine.setHoverRevealDelay($0) })) {
+                    ForEach(HoverRevealDelay.allCases) { delay in
+                        Text(delay.title).tag(delay)
+                    }
+                } label: {
+                    PreferenceLabel(symbol: "cursorarrow.motionlines", tint: .purple, title: tr("悬停触发图标展开", "Hover Trigger to Reveal"))
+                }
+                .pickerStyle(.menu)
 
                 Picker(selection: Binding(
                     get: { engine.autoRehideInterval },
@@ -84,10 +98,43 @@ struct GeneralSettingsView: View {
                     GestureRow(symbol: "cursorarrow.click.2", title: tr("双击图标", "Double Click"),
                                detail: tr("展开 / 收起全部", "Toggle All Sections"))
                 }
+                GestureRow(symbol: "arrow.up.and.down.circle", title: tr("滚轮上下滑动", "Scroll Up / Down"),
+                           detail: tr("下滑逐级展开 · 上滑收起", "Scroll Down to Reveal · Up to Collapse"))
                 GestureRow(symbol: "computermouse", title: tr("右键图标", "Right Click"),
                            detail: tr("打开速览面板", "Open Quick Panel"))
                 GestureRow(symbol: "arrow.left.and.right", title: tr("⌘ + 拖拽", "⌘ + Drag"),
                            detail: tr("调整图标位置", "Move Menu Bar Trigger"))
+            }
+
+            Section(tr("配置备份与迁移", "Configuration Backup")) {
+                LabeledContent {
+                    HStack(spacing: 8) {
+                        if !engine.floatingBarOrder.isEmpty {
+                            Button(tr("重置图标排序", "Reset Icon Order")) {
+                                engine.resetFloatingBarOrder()
+                                profileNotice = tr("已恢复默认悬浮栏图标顺序", "Floating bar icon order reset")
+                            }
+                            .controlSize(.small)
+                        }
+                        Button(tr("导入配置…", "Import…")) {
+                            importProfileFromDisk()
+                        }
+                        .controlSize(.small)
+
+                        Button(tr("导出配置…", "Export…")) {
+                            exportProfileToDisk()
+                        }
+                        .controlSize(.small)
+                    }
+                } label: {
+                    PreferenceLabel(symbol: "externaldrive.badge.checkmark", tint: .mint, title: tr("分区与外观配置文件", "Sections & Appearance Profile"))
+                }
+
+                if let profileNotice {
+                    Text(profileNotice)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .formStyle(.grouped)
@@ -101,6 +148,37 @@ struct GeneralSettingsView: View {
             catalog.rebuild(model: engine.model, query: "",
                             extraOwners: engine.ledgerOnlyOwners,
                             snapshot: engine.latestScanItems)
+        }
+    }
+
+    private func exportProfileToDisk() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "BarLens-Profile.json"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let data = try engine.exportProfile().encodedJSON()
+            try data.write(to: url, options: .atomic)
+            profileNotice = tr("已导出配置至 \(url.lastPathComponent)", "Exported profile to \(url.lastPathComponent)")
+        } catch {
+            profileNotice = tr("导出失败：\(error.localizedDescription)", "Export failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func importProfileFromDisk() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let data = try Data(contentsOf: url)
+            let profile = try BarLensProfile.decode(from: data)
+            engine.applyProfile(profile)
+            profileNotice = tr("已导入配置 \(url.lastPathComponent)", "Imported profile \(url.lastPathComponent)")
+        } catch {
+            profileNotice = tr("导入失败：配置文件格式无效", "Import failed: invalid profile format")
         }
     }
 }

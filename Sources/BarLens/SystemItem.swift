@@ -443,6 +443,18 @@ struct SystemItemModel {
         if persist { save() }
     }
 
+    mutating func replaceAssignments(_ newAssignments: [String: SectionModel.Section],
+                                     unassigned newUnassigned: SectionModel.Section,
+                                     persist: Bool = true) {
+        var normalized: [String: SectionModel.Section] = [:]
+        for (identifier, section) in newAssignments {
+            normalized[SystemItemName.canonicalIdentifier(for: identifier)] = section
+        }
+        assignments = normalized
+        unassigned = newUnassigned
+        if persist { save() }
+    }
+
     /// Fold a measured value into the registry. Returns false when the
     /// identifier was already known with a non-negative value.
     @discardableResult

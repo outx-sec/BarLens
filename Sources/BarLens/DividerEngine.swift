@@ -31,6 +31,10 @@ final class DividerEngine: ObservableObject {
     @Published private(set) var alwaysHiddenEnabled = Defaults.alwaysHiddenEnabled
     /// How long revealed hidden sections stay open before automatically collapsing.
     @Published private(set) var autoRehideInterval = Defaults.autoRehideInterval
+    /// Optional hover dwell time over the menu bar trigger icon to automatically reveal hidden items.
+    @Published private(set) var hoverRevealDelay = Defaults.hoverRevealDelay
+    /// User-customized item ordering inside the second-row floating bar.
+    @Published private(set) var floatingBarOrder = Defaults.floatingBarOrder
     /// Whether revealing shows items inline in the menu bar or in a floating bar below the dot.
     @Published private(set) var revealPresentationStyle = Defaults.revealPresentationStyle
     @Published private(set) var floatingBarIconStyle = Defaults.floatingBarIconStyle
@@ -1362,6 +1366,136 @@ final class DividerEngine: ObservableObject {
         onChange?()
     }
 
+    func setHoverRevealDelay(_ delay: HoverRevealDelay) {
+        guard hoverRevealDelay != delay else { return }
+        hoverRevealDelay = delay
+        Defaults.hoverRevealDelay = delay
+        onChange?()
+    }
+
+    func moveFloatingBarItem(_ movingID: String, to targetID: String, within currentIDs: [String]) {
+        var updated = floatingBarOrder
+        updated.move(itemID: movingID, to: targetID, within: currentIDs)
+        guard updated != floatingBarOrder else { return }
+        floatingBarOrder = updated
+        Defaults.floatingBarOrder = updated
+        onChange?()
+    }
+
+    func moveFloatingBarItemToEdge(_ itemID: String, toFront: Bool, within currentIDs: [String]) {
+        var updated = floatingBarOrder
+        updated.moveToEdge(itemID: itemID, toFront: toFront, within: currentIDs)
+        guard updated != floatingBarOrder else { return }
+        floatingBarOrder = updated
+        Defaults.floatingBarOrder = updated
+        onChange?()
+    }
+
+    func resetFloatingBarOrder() {
+        guard !floatingBarOrder.isEmpty else { return }
+        var updated = floatingBarOrder
+        updated.reset()
+        floatingBarOrder = updated
+        Defaults.floatingBarOrder = updated
+        onChange?()
+    }
+
+    func exportProfile() -> BarLensProfile {
+        let hotkeysRaw = Dictionary(uniqueKeysWithValues: bindings.map { ($0.key.rawValue, $0.value) })
+        let sysRaw = systemItems.assignments.mapValues(\.rawValue)
+        return BarLensProfile(
+            visibleBundles: Array(model.visible).sorted(),
+            hiddenBundles: Array(model.hidden).sorted(),
+            alwaysHiddenBundles: Array(model.alwaysHidden).sorted(),
+            systemItemAssignments: sysRaw,
+            floatingBarOrder: floatingBarOrder.orderedIDs,
+            alwaysHiddenEnabled: alwaysHiddenEnabled,
+            unclassifiedSection: unclassifiedSection.rawValue,
+            newSystemItemSection: newSystemItemSection.rawValue,
+            appearanceMode: appearanceMode.rawValue,
+            revealPresentationStyle: revealPresentationStyle.rawValue,
+            floatingBarIconStyle: floatingBarIconStyle.rawValue,
+            statusBarIconStyle: statusBarIconStyle.rawValue,
+            glassOpacity: glassOpacity,
+            rimIntensity: rimIntensity,
+            autoRehideInterval: autoRehideInterval.rawValue,
+            hoverRevealDelay: hoverRevealDelay.rawValue,
+            appLanguage: appLanguage.rawValue,
+            hotkeys: hotkeysRaw
+        )
+    }
+
+    func applyProfile(_ profile: BarLensProfile) {
+        let newUnclassified = SectionModel.Section(rawValue: profile.unclassifiedSection) ?? .visible
+        let newSysDefault = SectionModel.Section(rawValue: profile.newSystemItemSection) ?? .visible
+
+        unclassifiedSection = newUnclassified
+        Defaults.unclassifiedSection = newUnclassified
+        newSystemItemSection = newSysDefault
+        Defaults.newSystemItemSection = newSysDefault
+
+        model.replaceAll(
+            visible: Set(profile.visibleBundles),
+            hidden: Set(profile.hiddenBundles),
+            alwaysHidden: Set(profile.alwaysHiddenBundles),
+            unclassified: newUnclassified
+        )
+
+        var sysMap: [String: SectionModel.Section] = [:]
+        for (id, raw) in profile.systemItemAssignments {
+            if let sec = SectionModel.Section(rawValue: raw) {
+                sysMap[id] = sec
+            }
+        }
+        systemItems.replaceAssignments(sysMap, unassigned: newSysDefault)
+
+        let newOrder = FloatingBarOrder(orderedIDs: profile.floatingBarOrder)
+        floatingBarOrder = newOrder
+        Defaults.floatingBarOrder = newOrder
+
+        if let mode = AppearanceMode(rawValue: profile.appearanceMode) {
+            setAppearanceMode(mode)
+        }
+        if let style = RevealPresentationStyle(rawValue: profile.revealPresentationStyle) {
+            setRevealPresentationStyle(style)
+        }
+        if let iconStyle = FloatingBarIconDisplayStyle(rawValue: profile.floatingBarIconStyle) {
+            setFloatingBarIconStyle(iconStyle)
+        }
+        if let triggerStyle = StatusBarIconStyle(rawValue: profile.statusBarIconStyle) {
+            setStatusBarIconStyle(triggerStyle)
+        }
+        setGlassOpacity(profile.glassOpacity)
+        setRimIntensity(profile.rimIntensity)
+        if let rehide = AutoRehideInterval(rawValue: profile.autoRehideInterval) {
+            setAutoRehideInterval(rehide)
+        }
+        if let hover = HoverRevealDelay(rawValue: profile.hoverRevealDelay) {
+            setHoverRevealDelay(hover)
+        }
+        if let lang = AppLanguage(rawValue: profile.appLanguage) {
+            setAppLanguage(lang)
+        }
+
+        var newBindings: [HotkeyAction: Hotkey] = [:]
+        for (rawAction, hotkey) in profile.hotkeys {
+            if let action = HotkeyAction(rawValue: rawAction) {
+                newBindings[action] = hotkey
+            }
+        }
+        bindings = newBindings
+        Defaults.hotkeys = newBindings
+        if isStarted {
+            hotkeyRegistry.unregisterAll()
+            startHotkeys()
+        }
+
+        setAlwaysHiddenEnabled(profile.alwaysHiddenEnabled)
+        catalogRevision += 1
+        apply()
+        onChange?()
+    }
+
     private func scheduleAutoRehideIfNeeded() {
         autoRehideWork?.cancel()
         autoRehideWork = nil
@@ -1624,6 +1758,8 @@ final class DividerEngine: ObservableObject {
         systemItems.unassigned = .visible
         model.clear()
         systemItems.clearAssignments()
+        floatingBarOrder.reset()
+        Defaults.floatingBarOrder = floatingBarOrder
         catalogRevision += 1
         apply()
         onChange?()

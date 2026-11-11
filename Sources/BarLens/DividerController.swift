@@ -24,7 +24,10 @@ final class DividerController: NSObject, NSPopoverDelegate {
     private var proxyItems: [String: NSStatusItem] = [:]
     private var proxyItemTargets: [String: SystemItem] = [:]
     private var rightClickMonitor: Any?
+    private var scrollWheelMonitor: Any?
     private var panelKeyMonitor: Any?
+    private var hoverRevealWork: DispatchWorkItem?
+    private var lastScrollGestureAt: Date = .distantPast
     private var quickPopover: NSPopover?
     private let quickCatalog = Catalog()
     private lazy var floatingBar = FloatingBarController(
@@ -46,6 +49,7 @@ final class DividerController: NSObject, NSPopoverDelegate {
         closeQuickPanel()
         createDot()
         monitorRightClicks()
+        monitorScrollWheel()
         monitorPanelKeys()
 
         let center = NSWorkspace.shared.notificationCenter
@@ -80,8 +84,12 @@ final class DividerController: NSObject, NSPopoverDelegate {
         quickPopover?.contentViewController = nil
         quickPopover = nil
         engine.stop()
+        hoverRevealWork?.cancel()
+        hoverRevealWork = nil
         if let rightClickMonitor { NSEvent.removeMonitor(rightClickMonitor) }
         rightClickMonitor = nil
+        if let scrollWheelMonitor { NSEvent.removeMonitor(scrollWheelMonitor) }
+        scrollWheelMonitor = nil
         if let panelKeyMonitor { NSEvent.removeMonitor(panelKeyMonitor) }
         panelKeyMonitor = nil
         if let dotItem { NSStatusBar.system.removeStatusItem(dotItem) }
@@ -116,8 +124,34 @@ final class DividerController: NSObject, NSPopoverDelegate {
             // delivering *any* action — measured, and the reason clicks did
             // nothing for a while. Right clicks are picked up by a monitor
             // instead; see monitorRightClicks().
+            let tracker = DotHoverTrackingView(
+                frame: button.bounds,
+                onHoverChanged: { [weak self] hovering in
+                    self?.handleDotHover(hovering)
+                }
+            )
+            tracker.autoresizingMask = [.width, .height]
+            button.addSubview(tracker)
         }
         dotItem = item
+    }
+
+    private func handleDotHover(_ hovering: Bool) {
+        hoverRevealWork?.cancel()
+        hoverRevealWork = nil
+        guard hovering,
+              let delay = engine.hoverRevealDelay.seconds,
+              engine.reveal == .none,
+              quickPopover?.isShown != true else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.engine.reveal == .none,
+                  self.quickPopover?.isShown != true else { return }
+            self.engine.setReveal(.hidden)
+            self.refresh()
+        }
+        hoverRevealWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     /// Open the quick panel when the dot is right-clicked.
@@ -130,8 +164,44 @@ final class DividerController: NSObject, NSPopoverDelegate {
             guard let self,
                   let buttonWindow = self.dotItem?.button?.window,
                   event.window === buttonWindow else { return event }
+            self.hoverRevealWork?.cancel()
+            self.hoverRevealWork = nil
             self.toggleQuickPanel()
             return nil   // consumed
+        }
+    }
+
+    /// Scroll down on the trigger icon to reveal hidden items (or step up to
+    /// Always Hidden); scroll up to collapse.
+    private func monitorScrollWheel() {
+        scrollWheelMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel]) { [weak self] event in
+            guard let self,
+                  let buttonWindow = self.dotItem?.button?.window,
+                  event.window === buttonWindow else { return event }
+            let dy = event.scrollingDeltaY
+            guard abs(dy) >= 2.0 else { return event }
+            let now = Date()
+            guard now.timeIntervalSince(self.lastScrollGestureAt) >= 0.25 else { return nil }
+            self.lastScrollGestureAt = now
+            self.hoverRevealWork?.cancel()
+            self.hoverRevealWork = nil
+            self.closeQuickPanel(resetClicks: true)
+            let isDownward = event.isDirectionInvertedFromDevice ? (dy > 0) : (dy < 0)
+            if isDownward {
+                if self.engine.reveal == .none {
+                    self.engine.setReveal(.hidden)
+                } else if self.engine.reveal == .hidden, self.engine.alwaysHiddenEnabled {
+                    self.engine.setReveal(.all)
+                }
+            } else {
+                if self.engine.reveal == .all {
+                    self.engine.setReveal(.hidden)
+                } else if self.engine.reveal != .none {
+                    self.engine.setReveal(.none)
+                }
+            }
+            self.refresh()
+            return nil
         }
     }
 
@@ -322,6 +392,8 @@ final class DividerController: NSObject, NSPopoverDelegate {
     // MARK: - Actions
 
     @objc private func dotClicked() {
+        hoverRevealWork?.cancel()
+        hoverRevealWork = nil
         // A left click keeps its established reveal behavior even while the
         // quick panel is open. Closing must not break double-click pairing.
         closeQuickPanel(resetClicks: false)
@@ -395,5 +467,48 @@ final class DividerController: NSObject, NSPopoverDelegate {
         closeQuickPanel()
         stop()
         NSApp.terminate(nil)
+    }
+}
+
+/// Zero-hit-testing tracking view placed inside the status bar button so
+/// hover-to-reveal uses AppKit's native `NSTrackingArea` with zero background CPU polling.
+private final class DotHoverTrackingView: NSView {
+    private let onHoverChanged: (Bool) -> Void
+    private var trackingArea: NSTrackingArea?
+
+    init(frame frameRect: NSRect, onHoverChanged: @escaping (Bool) -> Void) {
+        self.onHoverChanged = onHoverChanged
+        super.init(frame: frameRect)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        onHoverChanged(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        onHoverChanged(false)
     }
 }

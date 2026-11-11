@@ -45,6 +45,7 @@ Traditional macOS menu bar managers work by inserting an ultra-wide invisible `N
 Click the **Eclipse Halo** trigger in your menu bar to unfurl hidden items in a floating **Liquid Glass** capsule nestled `4pt` beneath the top menu bar:
 - **4-Layer Optical Rim (`LiquidGlassRim`)**: Outer depth contour, inner cushion vignette, 135° Fresnel specular highlight, and top caustic sheen.
 - **Click-to-Open & Click-to-Collapse**: Click any third-party app or system icon inside the floating bar to invoke its native macOS menu in-place; click again (or click outside) to collapse smoothly.
+- **Drag-and-Drop Icon Reordering**: Drag icons directly inside the floating bar (or use right-click `Move to Front` / `Move to End`) to arrange your hidden items in any custom order.
 - **3 Built-In Optical Presets**: Switch effortlessly between **Crystal Lens** (default), **Obsidian Glass**, and **Prism Sheen**, or fine-tune **Glass Density** (`8%–75%`) and **Refractive Rim Intensity** (`40%–150%`) with a live interactive preview stage.
 
 ### 2. Three-Tier Section Model
@@ -54,6 +55,7 @@ Visible (始终显示)   ·   Hidden (可隐藏)   ·   Always Hidden (永久隐
 ```
 - **Per-Application Grouping**: Hiding operates by bundle identifier, so multi-icon apps move together cleanly without stranding orphan status items.
 - **One-Click Peek Pill**: When **Always Hidden** items exist, a compact purple glass badge (`+N`) appears inside the floating bar so you can peek at rarely used items on demand.
+- **Portable JSON Profile Backup**: Export and import your entire configuration (sections, custom icon order, hotkeys, and Liquid Glass optical tuning) as a single `BarLens-Profile.json` file.
 - **Live Bilingual UI**: Switch dynamically between **Follow System**, **English**, and **简体中文** from Settings or via the floating bar gear context menu.
 
 ### 3. Complete Support for All 18 macOS 27 System Menu Bar Items
@@ -76,9 +78,12 @@ BarLens integrates with both `MenuBarClientCore` assessment bitmasks and `com.ap
 | :--- | :--- |
 | **Left Click** on Trigger | Reveal or collapse the **Hidden** section (Floating Bar or Inline) |
 | **Double Click** on Trigger | Reveal or collapse both **Hidden** and **Always Hidden** sections |
+| **Hover** on Trigger *(Optional)* | Automatically reveal **Hidden** section after configurable dwell (`0.18s / 0.35s / 0.6s`) |
+| **Scroll Down / Up** on Trigger | Stepwise reveal (**Hidden** → **All**) on scroll down; collapse on scroll up |
 | **Right Click** on Trigger | Open the **Liquid Glass Quick Panel** (section counts, quick toggles, bulk assign) |
 | **Click Icon in Floating Bar** | Open the item's native menu; click the same icon again to close |
-| **Right Click Gear in Floating Bar** | Quick-switch **Appearance Mode** (`System / Light / Dark`) & **Language** (`EN / 中文`) |
+| **Drag Icon in Floating Bar** | Reorder icons inside the Floating Bar with live spring animation |
+| **Right Click Gear in Floating Bar** | Quick-switch **Appearance Mode**, **Icon Style**, **Language**, or reset icon order |
 | **⌘ + Drag** on Trigger | Reposition the trigger icon anywhere on the macOS menu bar |
 
 ---

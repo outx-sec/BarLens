@@ -248,3 +248,95 @@ final class SystemItemModelTests: XCTestCase {
         XCTAssertFalse(ItemEnumerator.canTriggerViaControlCenter(identifier: "com.apple.menuextra.clock"))
     }
 }
+
+final class FloatingBarOrderAndProfileTests: XCTestCase {
+    func testFloatingBarOrderSortsMovesAndPreservesUnseenItems() {
+        var order = FloatingBarOrder(orderedIDs: ["app:b", "app:a", "app:b"])
+        XCTAssertEqual(order.orderedIDs, ["app:b", "app:a"], "Duplicate IDs must be deduplicated")
+
+        let current = ["app:a", "app:b", "sys:wifi", "sys:clock"]
+        XCTAssertEqual(
+            order.sorted(current, id: { $0 }),
+            ["app:b", "app:a", "sys:wifi", "sys:clock"]
+        )
+
+        order.move(itemID: "sys:clock", to: "app:b", within: ["app:b", "app:a", "sys:wifi", "sys:clock"])
+        XCTAssertEqual(
+            order.sorted(current, id: { $0 }),
+            ["sys:clock", "app:b", "app:a", "sys:wifi"]
+        )
+
+        order.moveToEdge(itemID: "sys:clock", toFront: false, within: ["sys:clock", "app:b", "app:a", "sys:wifi"])
+        XCTAssertEqual(
+            order.sorted(current, id: { $0 }),
+            ["app:b", "app:a", "sys:wifi", "sys:clock"]
+        )
+
+        order.moveToEdge(itemID: "sys:wifi", toFront: true, within: ["app:b", "app:a", "sys:wifi", "sys:clock"])
+        XCTAssertEqual(
+            order.sorted(current, id: { $0 }),
+            ["sys:wifi", "app:b", "app:a", "sys:clock"]
+        )
+
+        order.reset()
+        XCTAssertTrue(order.isEmpty)
+        XCTAssertEqual(order.sorted(current, id: { $0 }), current)
+    }
+
+    func testBarLensProfileRoundTripSanitizesAndClamps() throws {
+        let rawProfile = BarLensProfile(
+            visibleBundles: ["com.example.visible", "com.apple.MenuBarAgent"],
+            hiddenBundles: ["com.example.hidden", "com.apple.controlcenter"],
+            alwaysHiddenBundles: ["com.example.always"],
+            systemItemAssignments: [
+                "com.apple.menuextra.volume": "hidden",
+                "com.apple.menuextra.displays": "alwaysHidden",
+                "com.apple.menuextra.wifi": "invalidSection",
+            ],
+            floatingBarOrder: ["app:com.example.hidden", "sys:com.apple.menuextra.sound"],
+            alwaysHiddenEnabled: true,
+            unclassifiedSection: "visible",
+            newSystemItemSection: "hidden",
+            appearanceMode: "dark",
+            revealPresentationStyle: "floatingBar",
+            floatingBarIconStyle: "monochrome",
+            statusBarIconStyle: "eclipse",
+            glassOpacity: 9.99,
+            rimIntensity: 0.01,
+            autoRehideInterval: 10,
+            hoverRevealDelay: 350,
+            appLanguage: "zh-Hans",
+            hotkeys: ["toggleHidden": Hotkey(keyCode: 42, carbonModifiers: 256, display: "⌘\\")]
+        )
+
+        let data = try rawProfile.encodedJSON()
+        let decoded = try BarLensProfile.decode(from: data)
+
+        XCTAssertEqual(decoded.visibleBundles, ["com.example.visible"])
+        XCTAssertEqual(decoded.hiddenBundles, ["com.example.hidden"])
+        XCTAssertEqual(decoded.alwaysHiddenBundles, ["com.example.always"])
+        XCTAssertEqual(
+            decoded.systemItemAssignments,
+            [
+                "com.apple.menuextra.sound": "hidden",
+                "com.apple.menuextra.display": "alwaysHidden",
+            ]
+        )
+        XCTAssertEqual(decoded.glassOpacity, 0.75, accuracy: 0.0001)
+        XCTAssertEqual(decoded.rimIntensity, 0.40, accuracy: 0.0001)
+        XCTAssertEqual(decoded.hoverRevealDelay, 350)
+        XCTAssertEqual(decoded.hotkeys["toggleHidden"], Hotkey(keyCode: 42, carbonModifiers: 256, display: "⌘\\"))
+
+        var sectionModel = SectionModel()
+        sectionModel.replaceAll(
+            visible: Set(decoded.visibleBundles),
+            hidden: Set(decoded.hiddenBundles),
+            alwaysHidden: Set(decoded.alwaysHiddenBundles),
+            unclassified: .hidden,
+            persist: false
+        )
+        XCTAssertEqual(sectionModel.section(of: "com.example.visible"), .visible)
+        XCTAssertEqual(sectionModel.section(of: "com.example.hidden"), .hidden)
+        XCTAssertEqual(sectionModel.section(of: "com.example.always"), .alwaysHidden)
+    }
+}

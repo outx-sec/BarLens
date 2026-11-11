@@ -157,6 +157,94 @@ enum AutoRehideInterval: Int, CaseIterable, Identifiable {
     }
 }
 
+/// Dwell time required when hovering over the menu bar trigger icon to automatically reveal hidden items.
+enum HoverRevealDelay: Int, CaseIterable, Identifiable {
+    case off = 0
+    case fast = 180
+    case standard = 350
+    case deliberate = 600
+
+    var id: Int { rawValue }
+
+    var title: String {
+        switch self {
+        case .off:        return tr("关闭", "Off")
+        case .fast:       return tr("灵敏 (0.18 秒)", "Fast (0.18s)")
+        case .standard:   return tr("标准 (0.35 秒)", "Standard (0.35s)")
+        case .deliberate: return tr("防误触 (0.6 秒)", "Deliberate (0.6s)")
+        }
+    }
+
+    var seconds: TimeInterval? {
+        rawValue > 0 ? TimeInterval(rawValue) / 1000.0 : nil
+    }
+}
+
+/// User-customizable ordering of items inside the second-row floating bar.
+struct FloatingBarOrder: Equatable, Codable {
+    private(set) var orderedIDs: [String]
+
+    init(orderedIDs: [String] = []) {
+        var seen: Set<String> = []
+        self.orderedIDs = orderedIDs.filter { seen.insert($0).inserted }
+    }
+
+    var isEmpty: Bool { orderedIDs.isEmpty }
+
+    /// Sorts `items` according to `orderedIDs`, keeping any newly discovered items
+    /// in their original relative order after explicitly ordered ones.
+    func sorted<T>(_ items: [T], id: (T) -> String) -> [T] {
+        guard !orderedIDs.isEmpty else { return items }
+        let rank = Dictionary(uniqueKeysWithValues: orderedIDs.enumerated().map { ($1, $0) })
+        return items.enumerated().sorted { lhs, rhs in
+            let r1 = rank[id(lhs.element)]
+            let r2 = rank[id(rhs.element)]
+            switch (r1, r2) {
+            case let (.some(a), .some(b)):
+                return a < b
+            case (.some, .none):
+                return true
+            case (.none, .some):
+                return false
+            case (.none, .none):
+                return lhs.offset < rhs.offset
+            }
+        }.map(\.element)
+    }
+
+    /// Reorders `movingID` relative to `targetID` within the currently visible `currentIDs` slice.
+    mutating func move(itemID movingID: String, to targetID: String, within currentIDs: [String]) {
+        guard movingID != targetID else { return }
+        var working = mergedOrder(with: currentIDs)
+        guard let fromIndex = working.firstIndex(of: movingID),
+              let toIndex = working.firstIndex(of: targetID) else { return }
+        let item = working.remove(at: fromIndex)
+        working.insert(item, at: toIndex)
+        orderedIDs = working
+    }
+
+    /// Moves `itemID` to the start or end of the `currentIDs` group.
+    mutating func moveToEdge(itemID: String, toFront: Bool, within currentIDs: [String]) {
+        guard !currentIDs.isEmpty else { return }
+        let anchors = currentIDs.filter { $0 != itemID }
+        guard let target = toFront ? anchors.first : anchors.last else { return }
+        move(itemID: itemID, to: target, within: currentIDs)
+    }
+
+    mutating func reset() {
+        orderedIDs.removeAll()
+    }
+
+    private func mergedOrder(with currentIDs: [String]) -> [String] {
+        var result = orderedIDs
+        var seen = Set(result)
+        for id in currentIDs where seen.insert(id).inserted {
+            result.append(id)
+        }
+        return result
+    }
+}
+
 /// The handful of preferences this app has.
 ///
 /// Deliberately not an ObservableObject: the engine owns the published copies
@@ -166,6 +254,8 @@ enum Defaults {
     private enum Key {
         static let alwaysHiddenEnabled = "alwaysHiddenEnabled"
         static let autoRehideInterval = "autoRehideInterval"
+        static let hoverRevealDelay = "hoverRevealDelay"
+        static let floatingBarOrder = "floatingBarOrder"
         static let revealPresentationStyle = "revealPresentationStyle"
         static let floatingBarIconStyle = "floatingBarIconStyle"
         static let statusBarIconStyle = "statusBarIconStyle"
@@ -265,6 +355,24 @@ enum Defaults {
             return AutoRehideInterval(rawValue: raw) ?? .off
         }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.autoRehideInterval) }
+    }
+
+    static var hoverRevealDelay: HoverRevealDelay {
+        get {
+            let raw = UserDefaults.standard.integer(forKey: Key.hoverRevealDelay)
+            return HoverRevealDelay(rawValue: raw) ?? .off
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.hoverRevealDelay) }
+    }
+
+    static var floatingBarOrder: FloatingBarOrder {
+        get {
+            let ids = UserDefaults.standard.stringArray(forKey: Key.floatingBarOrder) ?? []
+            return FloatingBarOrder(orderedIDs: ids)
+        }
+        set {
+            UserDefaults.standard.set(newValue.orderedIDs, forKey: Key.floatingBarOrder)
+        }
     }
 
     static var hasShownWelcome: Bool {
