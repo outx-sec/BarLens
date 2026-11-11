@@ -354,7 +354,8 @@ final class DividerController: NSObject, NSPopoverDelegate {
         let panel = quickPopover ?? NSPopover()
         panel.delegate = self
         panel.behavior = .transient
-        panel.appearance = engine.appearanceMode.nsAppearance
+        let targetAppearance = engine.effectiveNSAppearance
+        panel.appearance = targetAppearance
         panel.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let content = QuickPanelView(
             engine: engine,
@@ -377,7 +378,9 @@ final class DividerController: NSObject, NSPopoverDelegate {
             onQuit: { [weak self] in self?.quit() },
             onClose: { [weak self] in self?.closeQuickPanel() })
             .frame(width: 368, height: height)
-        panel.contentViewController = NSHostingController(rootView: content)
+        let hosting = NSHostingController(rootView: content)
+        hosting.view.appearance = targetAppearance
+        panel.contentViewController = hosting
         panel.contentSize = NSSize(width: 368, height: height)
         quickPopover = panel
         // Anchor to the status item itself so the panel follows its display and
@@ -482,7 +485,9 @@ final class DividerController: NSObject, NSPopoverDelegate {
         syncProxyItems()
         settings.syncAppearance()
         onboarding.syncAppearance()
-        quickPopover?.appearance = engine.appearanceMode.nsAppearance
+        let targetAppearance = engine.effectiveNSAppearance
+        quickPopover?.appearance = targetAppearance
+        quickPopover?.contentViewController?.view.appearance = targetAppearance
         floatingBar.update(relativeTo: dotItem?.button)
     }
 

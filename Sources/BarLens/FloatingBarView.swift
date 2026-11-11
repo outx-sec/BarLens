@@ -62,7 +62,8 @@ final class FloatingBarController {
                         snapshot: engine.latestScanItems)
 
         let panel = ensurePanel()
-        panel.appearance = engine.appearanceMode.nsAppearance
+        let targetAppearance = engine.effectiveNSAppearance
+        panel.appearance = targetAppearance
         let maxBarWidth = max(260, screen.visibleFrame.width - 32)
         let rootView = FloatingBarView(
             engine: engine,
@@ -81,11 +82,13 @@ final class FloatingBarController {
 
         if let hosting = panel.contentViewController as? NSHostingController<FloatingBarView> {
             hosting.rootView = rootView
+            hosting.view.appearance = targetAppearance
         } else {
             let hosting = NSHostingController(rootView: rootView)
             hosting.sizingOptions = [.intrinsicContentSize]
             hosting.view.wantsLayer = true
             hosting.view.layer?.backgroundColor = NSColor.clear.cgColor
+            hosting.view.appearance = targetAppearance
             panel.contentViewController = hosting
         }
 
@@ -293,14 +296,15 @@ struct FloatingBarView: View {
         return engine.floatingBarOrder.sorted(appItems + sysItems, id: \.id)
     }
 
-    @Environment(\.colorScheme) private var colorScheme
+    private var colorScheme: ColorScheme { engine.effectiveColorScheme }
 
     var body: some View {
         barContent
             .padding(.top, 5)
             .padding(.horizontal, 18)
             .padding(.bottom, 18)
-            .preferredColorScheme(engine.appearanceMode.colorScheme)
+            .environment(\.colorScheme, engine.effectiveColorScheme)
+            .preferredColorScheme(engine.effectiveColorScheme)
             .onHover { hovering in
                 engine.isFloatingBarHovered = hovering
             }

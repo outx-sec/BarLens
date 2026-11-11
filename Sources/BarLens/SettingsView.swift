@@ -48,7 +48,8 @@ struct SettingsView: View {
     @AppStorage("glassOpacity") private var glassOpacity: Double = 0.28
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.colorScheme) private var colorScheme
+
+    private var colorScheme: ColorScheme { engine.effectiveColorScheme }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -81,7 +82,8 @@ struct SettingsView: View {
         }
         .ignoresSafeArea()
         .frame(minWidth: 720, minHeight: 480)
-        .preferredColorScheme(engine.appearanceMode.colorScheme)
+        .environment(\.colorScheme, engine.effectiveColorScheme)
+        .preferredColorScheme(engine.effectiveColorScheme)
         .onAppear {
             if let target = engine.requestedSettingsPane {
                 pane = target

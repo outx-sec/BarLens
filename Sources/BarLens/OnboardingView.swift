@@ -24,7 +24,8 @@ final class OnboardingWindowController: NSWindowController {
         window.backgroundColor = .clear
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
-        window.appearance = engine.appearanceMode.nsAppearance
+        let initialAppearance = engine.effectiveNSAppearance
+        window.appearance = initialAppearance
 
         super.init(window: window)
 
@@ -43,6 +44,7 @@ final class OnboardingWindowController: NSWindowController {
             }
         )
         let hosting = NSHostingController(rootView: rootView)
+        hosting.view.appearance = initialAppearance
         window.contentViewController = hosting
         window.setContentSize(NSSize(width: 660, height: 520))
     }
@@ -52,7 +54,10 @@ final class OnboardingWindowController: NSWindowController {
     }
 
     func syncAppearance() {
-        window?.appearance = engine.appearanceMode.nsAppearance
+        let target = engine.effectiveNSAppearance
+        window?.appearance = target
+        window?.contentView?.appearance = target
+        window?.contentViewController?.view.appearance = target
     }
 
     func present() {
@@ -101,7 +106,8 @@ struct OnboardingView: View {
     @AppStorage("glassOpacity") private var glassOpacity: Double = 0.36
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.colorScheme) private var colorScheme
+
+    private var colorScheme: ColorScheme { engine.effectiveColorScheme }
 
     private let totalSteps = 4
 
@@ -140,7 +146,8 @@ struct OnboardingView: View {
         }
         .ignoresSafeArea()
         .frame(width: 660, height: 520)
-        .preferredColorScheme(engine.appearanceMode.colorScheme)
+        .environment(\.colorScheme, engine.effectiveColorScheme)
+        .preferredColorScheme(engine.effectiveColorScheme)
     }
 
     // MARK: - Top & Bottom Chrome

@@ -27,8 +27,11 @@ final class SettingsWindowController: NSWindowController {
         window.backgroundColor = .clear
         window.minSize = NSSize(width: 720, height: 480)
         window.isReleasedWhenClosed = false
-        window.appearance = engine.appearanceMode.nsAppearance
-        window.contentViewController = NSHostingController(rootView: SettingsView(engine: engine))
+        let initialAppearance = engine.effectiveNSAppearance
+        window.appearance = initialAppearance
+        let hosting = NSHostingController(rootView: SettingsView(engine: engine))
+        hosting.view.appearance = initialAppearance
+        window.contentViewController = hosting
         // Hosting controllers initially size themselves to the SwiftUI minimum.
         // Establish the comfortable default after attaching the content.
         window.setContentSize(NSSize(width: 820, height: 600))
@@ -40,7 +43,10 @@ final class SettingsWindowController: NSWindowController {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     func syncAppearance() {
-        window?.appearance = engine.appearanceMode.nsAppearance
+        let target = engine.effectiveNSAppearance
+        window?.appearance = target
+        window?.contentView?.appearance = target
+        window?.contentViewController?.view.appearance = target
     }
 
     /// Show the window, bringing it forward. The app has no Dock icon and is not

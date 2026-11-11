@@ -19,7 +19,8 @@ struct QuickPanelView: View {
     @AppStorage("glassOpacity") private var glassOpacity: Double = 0.28
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.colorScheme) private var colorScheme
+
+    private var colorScheme: ColorScheme { engine.effectiveColorScheme }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -68,7 +69,8 @@ struct QuickPanelView: View {
         }
         .frame(width: 368)
         .frame(maxHeight: .infinity)
-        .preferredColorScheme(engine.appearanceMode.colorScheme)
+        .environment(\.colorScheme, engine.effectiveColorScheme)
+        .preferredColorScheme(engine.effectiveColorScheme)
         .background {
             if reduceTransparency {
                 Color(nsColor: .windowBackgroundColor)
