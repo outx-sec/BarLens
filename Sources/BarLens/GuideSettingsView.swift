@@ -160,6 +160,18 @@ struct GuideSettingsView: View {
     private var floatingBarSection: some View {
         Section(tr("Liquid Glass 悬浮菜单栏技巧", "Floating Bar Tips & Tricks")) {
             GuideItemRow(
+                symbol: "viewfinder",
+                tone: .cyan,
+                title: tr("零截屏「透镜状态透视」", "Zero-Capture Semantic Lens HUD"),
+                detail: tr("无需屏幕录制权限，直接在悬浮栏下方实时透视隐藏应用的未读计数、代理状态、电量输入法等语义信息", "Reads live unread counts, proxy/sync telemetry, battery, and input source right in the Floating Bar with zero Screen Recording")
+            )
+            GuideItemRow(
+                symbol: "shield.lefthalf.filled",
+                tone: .teal,
+                title: tr("顶栏容量保护与防刘海吞噬", "Spatial Budget & Notch Guard"),
+                detail: tr("自动感知刘海与应用长菜单边界，空间不足或超出设定席位时将边缘图标临时暂收入透镜，右键可锁定常驻豁免", "Automatically tucks edge icons into the Lens before Notch or wide-menu collision; right-click any Visible app to pin it")
+            )
+            GuideItemRow(
                 symbol: "menubar.arrow.down.rectangle",
                 tone: .blue,
                 title: tr("原位唤起原生菜单", "In-Place Native Menus"),

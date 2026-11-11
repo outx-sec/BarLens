@@ -397,6 +397,13 @@ private struct SystemItemRow: View {
                 BadgeTag(text: tr("默认", "Default"))
             }
 
+            if engine.lensTelemetryEnabled {
+                let sysTelemetry = engine.telemetry(for: item)
+                if let chip = sysTelemetry.shortChip {
+                    BadgeTag(text: chip, tone: .cyan)
+                }
+            }
+
             Spacer(minLength: 12)
 
             Picker("", selection: Binding(
@@ -481,6 +488,20 @@ private struct AppRow: View {
                     BadgeTag(text: tr("默认", "Default"))
                 }
 
+                if entry.isRunning && engine.overflowDemotedBundleIDs.contains(entry.bundleID) {
+                    BadgeTag(text: tr("容量暂收", "Tucked"), tone: .teal)
+                } else if entry.section == .visible && engine.isSpatiallyExempt(entry.bundleID) && engine.spatialBudgetPolicy != .off {
+                    BadgeTag(text: tr("已锁常驻", "Pinned"), tone: .blue)
+                }
+
+                if entry.isRunning && engine.lensTelemetryEnabled {
+                    if let unread = entry.telemetry.unreadBadge {
+                        BadgeTag(text: tr("未读 \(unread)", "Unread \(unread)"), tone: .orange)
+                    } else if let chip = entry.telemetry.shortChip {
+                        BadgeTag(text: chip, tone: .cyan)
+                    }
+                }
+
                 if entry.isLedgerOnly {
                     Button {
                         isShowingInfo.toggle()
@@ -543,6 +564,20 @@ private struct AppRow: View {
                     Label(section.title, systemImage: section.symbol)
                 }
             }
+            if entry.section == .visible && engine.spatialBudgetPolicy != .off {
+                Divider()
+                let exempt = engine.isSpatiallyExempt(entry.bundleID)
+                Button {
+                    engine.toggleSpatialExemption(for: entry.bundleID)
+                } label: {
+                    Label(
+                        exempt
+                            ? tr("取消顶栏锁定常驻", "Unpin from Top Bar")
+                            : tr("锁定顶栏常驻（免暂收）", "Pin to Top Bar (Never Tuck)"),
+                        systemImage: exempt ? "pin.slash" : "pin.fill"
+                    )
+                }
+            }
             if entry.isClassified {
                 Divider()
                 if entry.isRunning {
@@ -566,16 +601,22 @@ private struct AppRow: View {
 
 private struct BadgeTag: View {
     let text: String
+    var tone: SemanticTone? = nil
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Text(text)
-            .font(.system(size: 10, weight: .medium))
-            .foregroundStyle(.primary.opacity(0.78))
+            .font(.system(size: 10, weight: tone == nil ? .medium : .semibold))
+            .foregroundStyle(
+                tone.map { BarLensPalette.ink($0, in: colorScheme) }
+                    ?? .primary.opacity(0.78)
+            )
+            .lineLimit(1)
             .padding(.horizontal, 6.5)
             .padding(.vertical, 2)
             .background(
-                colorScheme == .dark ? Color.white.opacity(0.11) : Color.black.opacity(0.07),
+                tone.map { BarLensPalette.badgeFill($0, in: colorScheme) }
+                    ?? (colorScheme == .dark ? Color.white.opacity(0.11) : Color.black.opacity(0.07)),
                 in: Capsule()
             )
     }

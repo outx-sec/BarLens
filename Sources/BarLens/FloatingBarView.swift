@@ -37,6 +37,19 @@ final class FloatingBarController {
                 }
             }
             .store(in: &cancellables)
+
+        Publishers.Merge(
+            engine.$lensTelemetryEnabled.map { _ in () },
+            engine.$overflowDemotedBundleIDs.map { _ in () }
+        )
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] _ in
+            guard let self, self.isShown else { return }
+            DispatchQueue.main.async {
+                self.layoutAndPositionPanel()
+            }
+        }
+        .store(in: &cancellables)
     }
 
     var isShown: Bool {
@@ -247,6 +260,36 @@ struct FloatingBarView: View {
     @State private var activeDragTranslationX: CGFloat = 0
     @State private var settleItemID: String?
     @State private var settleOffsetX: CGFloat = 0
+    @State private var hoveredItemID: String?
+
+    private var tuckedOverflowItems: [FloatingBarItem] {
+        guard !engine.overflowDemotedBundleIDs.isEmpty else { return [] }
+        let useMono = engine.floatingBarIconStyle == .monochrome
+        let overflowApps = catalog.entries
+            .filter {
+                $0.isRunning && $0.itemCount > 0
+                    && engine.overflowDemotedBundleIDs.contains($0.bundleID)
+                    && engine.model.section(of: $0.bundleID) == .visible
+            }
+            .map { entry in
+                let icon = useMono ? (entry.monochromeIcon ?? entry.icon) : entry.icon
+                let isTemplate = useMono && entry.monochromeIcon != nil
+                return FloatingBarItem(
+                    id: "app:\(entry.bundleID)",
+                    title: entry.displayName,
+                    icon: icon,
+                    isTemplateIcon: isTemplate,
+                    symbol: "app",
+                    badgeCount: entry.itemCount > 1 ? entry.itemCount : nil,
+                    section: .visible,
+                    telemetry: engine.lensTelemetryEnabled ? entry.telemetry : .empty,
+                    isSpatialOverflow: true,
+                    isSpatiallyExempt: engine.isSpatiallyExempt(entry.bundleID),
+                    target: .app(bundleID: entry.bundleID, isClassified: entry.isClassified)
+                )
+            }
+        return engine.floatingBarOrder.sorted(overflowApps, id: \.id)
+    }
 
     private var hiddenItems: [FloatingBarItem] {
         items(in: .hidden)
@@ -255,6 +298,24 @@ struct FloatingBarView: View {
     private var alwaysHiddenItems: [FloatingBarItem] {
         guard engine.alwaysHiddenEnabled else { return [] }
         return items(in: .alwaysHidden)
+    }
+
+    private var allVisibleLensItems: [FloatingBarItem] {
+        var result = tuckedOverflowItems + hiddenItems
+        if engine.reveal == .all {
+            result += alwaysHiddenItems
+        }
+        return result
+    }
+
+    private var hasDisplayedItems: Bool {
+        !tuckedOverflowItems.isEmpty
+            || !hiddenItems.isEmpty
+            || (engine.reveal == .all && !alwaysHiddenItems.isEmpty)
+    }
+
+    private var showLensReadout: Bool {
+        engine.lensTelemetryEnabled && (hasDisplayedItems || (engine.alwaysHiddenEnabled && !alwaysHiddenItems.isEmpty))
     }
 
     private func effective(_ section: SectionModel.Section) -> SectionModel.Section {
@@ -276,6 +337,9 @@ struct FloatingBarView: View {
                     symbol: "app",
                     badgeCount: entry.itemCount > 1 ? entry.itemCount : nil,
                     section: section,
+                    telemetry: engine.lensTelemetryEnabled ? entry.telemetry : .empty,
+                    isSpatialOverflow: false,
+                    isSpatiallyExempt: engine.isSpatiallyExempt(entry.bundleID),
                     target: .app(bundleID: entry.bundleID, isClassified: entry.isClassified)
                 )
             }
@@ -290,6 +354,9 @@ struct FloatingBarView: View {
                     symbol: sys.symbol,
                     badgeCount: nil,
                     section: section,
+                    telemetry: engine.telemetry(for: sys),
+                    isSpatialOverflow: false,
+                    isSpatiallyExempt: false,
                     target: .system(sys, isClassified: engine.systemItems.isClassified(sys))
                 )
             }
@@ -299,20 +366,39 @@ struct FloatingBarView: View {
     private var colorScheme: ColorScheme { engine.effectiveColorScheme }
 
     var body: some View {
-        barContent
-            .padding(.top, 5)
-            .padding(.horizontal, 18)
-            .padding(.bottom, 18)
-            .environment(\.colorScheme, engine.effectiveColorScheme)
-            .preferredColorScheme(engine.effectiveColorScheme)
-            .onHover { hovering in
-                engine.isFloatingBarHovered = hovering
+        VStack(spacing: 5) {
+            barContent
+                .frame(minWidth: showLensReadout ? 286 : nil)
+
+            if showLensReadout {
+                Color.clear
+                    .frame(height: 26)
+                    .overlay {
+                        FloatingLensReadoutBar(
+                            items: allVisibleLensItems,
+                            hoveredItemID: hoveredItemID,
+                            tuckedCount: tuckedOverflowItems.count,
+                            engine: engine
+                        )
+                    }
             }
+        }
+        .padding(.top, 5)
+        .padding(.horizontal, 18)
+        .padding(.bottom, 18)
+        .environment(\.colorScheme, engine.effectiveColorScheme)
+        .preferredColorScheme(engine.effectiveColorScheme)
+        .onHover { hovering in
+            engine.isFloatingBarHovered = hovering
+            if !hovering {
+                hoveredItemID = nil
+            }
+        }
     }
 
     private var barContent: some View {
         HStack(spacing: 7) {
-            if hiddenItems.isEmpty && (engine.reveal != .all || alwaysHiddenItems.isEmpty) {
+            if !hasDisplayedItems {
                 Button(action: onOpenSettings) {
                     HStack(spacing: 7) {
                         Image(systemName: "rectangle.3.group")
@@ -329,6 +415,27 @@ struct FloatingBarView: View {
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 7) {
+                        if !tuckedOverflowItems.isEmpty {
+                            let tuckedIDs = tuckedOverflowItems.map(\.id)
+                            let tuckedIndexByID = Dictionary(uniqueKeysWithValues: tuckedIDs.enumerated().map { ($1, $0) })
+                            ForEach(tuckedOverflowItems) { item in
+                                FloatingBarItemButton(
+                                    item: item,
+                                    itemIndex: tuckedIndexByID[item.id] ?? 0,
+                                    siblingIDs: tuckedIDs,
+                                    engine: engine,
+                                    hoveredItemID: $hoveredItemID,
+                                    activeDrag: $activeDrag,
+                                    activeDragTranslationX: $activeDragTranslationX,
+                                    settleItemID: $settleItemID,
+                                    settleOffsetX: $settleOffsetX
+                                )
+                            }
+                            if !hiddenItems.isEmpty || (engine.reveal == .all && !alwaysHiddenItems.isEmpty) {
+                                FloatingBarSeparator()
+                            }
+                        }
+
                         let hiddenIDs = hiddenItems.map(\.id)
                         let hiddenIndexByID = Dictionary(uniqueKeysWithValues: hiddenIDs.enumerated().map { ($1, $0) })
                         ForEach(hiddenItems) { item in
@@ -337,6 +444,7 @@ struct FloatingBarView: View {
                                 itemIndex: hiddenIndexByID[item.id] ?? 0,
                                 siblingIDs: hiddenIDs,
                                 engine: engine,
+                                hoveredItemID: $hoveredItemID,
                                 activeDrag: $activeDrag,
                                 activeDragTranslationX: $activeDragTranslationX,
                                 settleItemID: $settleItemID,
@@ -356,6 +464,7 @@ struct FloatingBarView: View {
                                     itemIndex: alwaysIndexByID[item.id] ?? 0,
                                     siblingIDs: alwaysIDs,
                                     engine: engine,
+                                    hoveredItemID: $hoveredItemID,
                                     activeDrag: $activeDrag,
                                     activeDragTranslationX: $activeDragTranslationX,
                                     settleItemID: $settleItemID,
@@ -455,7 +564,168 @@ private struct FloatingBarItem: Identifiable {
     let symbol: String
     let badgeCount: Int?
     let section: SectionModel.Section
+    let telemetry: LensTelemetry
+    let isSpatialOverflow: Bool
+    let isSpatiallyExempt: Bool
     let target: Target
+}
+
+private struct FloatingLensReadoutBar: View {
+    let items: [FloatingBarItem]
+    let hoveredItemID: String?
+    let tuckedCount: Int
+    @ObservedObject var engine: DividerEngine
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var hoveredItem: FloatingBarItem? {
+        guard let hoveredItemID else { return nil }
+        return items.first { $0.id == hoveredItemID }
+    }
+
+    private var activeSignalItems: [FloatingBarItem] {
+        items.filter { $0.telemetry.hasLiveSignal }
+    }
+
+    private func trigger(_ item: FloatingBarItem) {
+        switch item.target {
+        case .app(let bundleID, _):
+            engine.activateFromFloatingBar(bundleID: bundleID)
+        case .system(let sysItem, _):
+            engine.activateFromFloatingBar(systemItem: sysItem)
+        }
+    }
+
+    var body: some View {
+        let cyanInk = BarLensPalette.ink(.cyan, in: colorScheme)
+        let tealInk = BarLensPalette.ink(.teal, in: colorScheme)
+        let purpleInk = BarLensPalette.ink(.purple, in: colorScheme)
+
+        HStack(spacing: 7) {
+            if let item = hoveredItem {
+                let badgeTone: SemanticTone = item.isSpatialOverflow
+                    ? .teal
+                    : (item.section == .alwaysHidden ? .purple : .cyan)
+                let badgeInk = BarLensPalette.ink(badgeTone, in: colorScheme)
+
+                Circle()
+                    .fill(badgeInk)
+                    .frame(width: 5.5, height: 5.5)
+
+                Text(item.title)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .layoutPriority(2)
+
+                if item.isSpatialOverflow {
+                    Text(tr("容量暂收", "Overflow"))
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(tealInk)
+                        .padding(.horizontal, 5.5)
+                        .padding(.vertical, 1.5)
+                        .background(BarLensPalette.badgeFill(.teal, in: colorScheme), in: Capsule())
+                        .fixedSize()
+                } else if item.section == .alwaysHidden {
+                    Text(tr("永久隐藏", "Always Hidden"))
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(purpleInk)
+                        .padding(.horizontal, 5.5)
+                        .padding(.vertical, 1.5)
+                        .background(BarLensPalette.badgeFill(.purple, in: colorScheme), in: Capsule())
+                        .fixedSize()
+                }
+
+                Text("·")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.primary.opacity(0.45))
+
+                if let summary = item.telemetry.fullSummary {
+                    Text(summary)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(cyanInk)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                } else {
+                    Text(item.isSpatialOverflow
+                         ? tr("点按打开菜单 · 右键可锁定顶栏常驻", "Click: Menu · Right-click: Pin to Top Bar")
+                         : tr("点按打开菜单 · 按住拖拽排序", "Click: Menu · Hold & drag: Reorder"))
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(.primary.opacity(0.76))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+
+                Spacer(minLength: 0)
+            } else if !activeSignalItems.isEmpty {
+                Image(systemName: "viewfinder")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(cyanInk)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(activeSignalItems.prefix(4)) { item in
+                            Button {
+                                trigger(item)
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Text(item.title)
+                                        .font(.system(size: 10.5, weight: .semibold))
+                                        .foregroundStyle(.primary)
+                                    if let badge = item.telemetry.unreadBadge {
+                                        Text(badge)
+                                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                                            .monospacedDigit()
+                                            .foregroundStyle(BarLensPalette.ink(.orange, in: colorScheme))
+                                    } else if let chip = item.telemetry.shortChip {
+                                        Text(chip)
+                                            .font(.system(size: 10.5, weight: .medium))
+                                            .foregroundStyle(cyanInk)
+                                            .lineLimit(1)
+                                    }
+                                }
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 2.5)
+                                .background(
+                                    colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.055),
+                                    in: Capsule()
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                Spacer(minLength: 0)
+            } else if tuckedCount > 0 {
+                Image(systemName: "shield.lefthalf.filled")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(tealInk)
+                Text(tr("已暂收 \(tuckedCount) 项防顶栏拥挤 · 悬停图标查看详情",
+                        "\(tuckedCount) tucked to prevent bar overflow · Hover to inspect"))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.primary.opacity(0.84))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            } else {
+                Image(systemName: "viewfinder")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(cyanInk)
+                Text(tr("透镜就绪 · 悬停透视实时状态 · 拖拽排序",
+                        "Lens Ready · Hover to inspect live state · Drag to reorder"))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.primary.opacity(0.78))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(.horizontal, 11)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .settingsGlass(cornerRadius: 13)
+        .background {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .fill(Color.black.opacity(0.001))
+                .shadow(color: .black.opacity(colorScheme == .dark ? 0.24 : 0.08), radius: 4, y: 2)
+        }
+    }
 }
 
 private struct FloatingBarGearButton: View {
@@ -499,6 +769,28 @@ private struct FloatingBarGearButton: View {
                         symbol: "menubar.dock.rectangle",
                         actionBlock: onExpandInline
                     ))
+
+                    let lensItem = MenuActionItem(
+                        title: tr("透镜状态透视", "Semantic Lens HUD"),
+                        symbol: "viewfinder"
+                    ) {
+                        engine.setLensTelemetryEnabled(!engine.lensTelemetryEnabled)
+                    }
+                    lensItem.state = engine.lensTelemetryEnabled ? .on : .off
+                    menu.addItem(lensItem)
+
+                    menu.addItem(.separator())
+                    let budgetHeader = NSMenuItem(title: tr("顶栏容量保护", "Top Bar Budget"), action: nil, keyEquivalent: "")
+                    budgetHeader.isEnabled = false
+                    menu.addItem(budgetHeader)
+                    for policy in SpatialBudgetPolicy.allCases {
+                        let item = MenuActionItem(title: policy.title, symbol: policy.symbol) {
+                            engine.setSpatialBudgetPolicy(policy)
+                        }
+                        item.state = (engine.spatialBudgetPolicy == policy) ? .on : .off
+                        menu.addItem(item)
+                    }
+
                     menu.addItem(.separator())
 
                     let iconHeader = NSMenuItem(title: tr("图标样式", "Icon Style"), action: nil, keyEquivalent: "")
@@ -573,6 +865,7 @@ private struct FloatingBarItemButton: View {
     let itemIndex: Int
     let siblingIDs: [String]
     @ObservedObject var engine: DividerEngine
+    @Binding var hoveredItemID: String?
     @Binding var activeDrag: ActiveFloatingBarDrag?
     @Binding var activeDragTranslationX: CGFloat
     @Binding var settleItemID: String?
@@ -623,7 +916,16 @@ private struct FloatingBarItemButton: View {
             hovered: hovered || isDraggingThis,
             isPressed: pressed
         ) {
-            ZStack(alignment: .bottomTrailing) {
+            ZStack {
+                if item.isSpatialOverflow && !isActive {
+                    Circle()
+                        .inset(by: 1)
+                        .strokeBorder(
+                            BarLensPalette.ink(.teal, in: colorScheme).opacity(0.45),
+                            lineWidth: 1.1
+                        )
+                }
+
                 if let icon = item.icon {
                     if item.isTemplateIcon {
                         Image(nsImage: icon)
@@ -654,6 +956,32 @@ private struct FloatingBarItemButton: View {
                         )
                         .frame(width: 22, height: 22)
                 }
+
+                if let unread = item.telemetry.unreadBadge {
+                    Text(unread)
+                        .font(.system(size: 8.5, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 0.5)
+                        .background(Color(red: 0.92, green: 0.26, blue: 0.24), in: Capsule())
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .offset(x: 3, y: -1)
+                } else if item.telemetry.hasLiveSignal {
+                    Circle()
+                        .fill(BarLensPalette.ink(.cyan, in: colorScheme))
+                        .frame(width: 5.5, height: 5.5)
+                        .overlay {
+                            Circle()
+                                .strokeBorder(
+                                    colorScheme == .dark ? Color.black.opacity(0.6) : Color.white.opacity(0.9),
+                                    lineWidth: 0.8
+                                )
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .offset(x: -3, y: 3)
+                }
+
                 if let count = item.badgeCount {
                     Text("\(count)")
                         .font(.system(size: 8, weight: .bold, design: .rounded))
@@ -666,6 +994,7 @@ private struct FloatingBarItemButton: View {
                                 : BarLensPalette.selectionFill(in: colorScheme),
                             in: Capsule()
                         )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                         .offset(x: 4, y: 3)
                 }
             }
@@ -677,8 +1006,18 @@ private struct FloatingBarItemButton: View {
         .zIndex(isDraggingThis || settleItemID == item.id ? 20 : 0)
         .overlay {
             FloatingBarItemMouseBridge(
-                toolTip: tr("\(item.title) · 点按打开菜单 · 按住左右拖拽排序 · 右键快捷操作", "\(item.title) · Click: Menu · Drag: Reorder · Right-Click: Actions"),
-                onHoverChanged: { hovered = $0 },
+                toolTip: engine.lensTelemetryEnabled
+                    ? ""
+                    : tr("\(item.title) · 点按打开菜单 · 按住左右拖拽排序 · 右键快捷操作",
+                         "\(item.title) · Click: Menu · Drag: Reorder · Right-Click: Actions"),
+                onHoverChanged: { isHovering in
+                    hovered = isHovering
+                    if isHovering {
+                        hoveredItemID = item.id
+                    } else if hoveredItemID == item.id {
+                        hoveredItemID = nil
+                    }
+                },
                 onPressedChanged: { pressed = $0 },
                 onClick: triggerItem,
                 onDragStarted: {
@@ -760,11 +1099,33 @@ private struct FloatingBarItemButton: View {
         header.isEnabled = false
         menu.addItem(header)
 
+        if let summary = item.telemetry.fullSummary {
+            let statusLine = NSMenuItem(title: summary, action: nil, keyEquivalent: "")
+            statusLine.isEnabled = false
+            menu.addItem(statusLine)
+        }
+
         menu.addItem(MenuActionItem(
             title: tr("打开 / 收起菜单", "Open / Toggle Menu"),
             symbol: "menubar.arrow.down.rectangle",
             actionBlock: triggerItem
         ))
+
+        if case .app(let bundleID, _) = item.target,
+           item.section == .visible,
+           engine.spatialBudgetPolicy != .off {
+            let exempt = engine.isSpatiallyExempt(bundleID)
+            let pinItem = MenuActionItem(
+                title: exempt
+                    ? tr("取消顶栏锁定常驻", "Unpin from Top Bar")
+                    : tr("锁定顶栏常驻（免暂收）", "Pin to Top Bar (Never Tuck)"),
+                symbol: exempt ? "pin.slash" : "pin.fill"
+            ) {
+                engine.toggleSpatialExemption(for: bundleID)
+            }
+            pinItem.state = exempt ? .on : .off
+            menu.addItem(pinItem)
+        }
 
         let orderedSiblings = engine.floatingBarOrder.sorted(siblingIDs, id: { $0 })
         if orderedSiblings.count > 1, let idx = orderedSiblings.firstIndex(of: item.id) {

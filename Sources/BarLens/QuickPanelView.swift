@@ -210,6 +210,15 @@ struct QuickPanelView: View {
                     .padding(.horizontal, 6.5)
                     .padding(.vertical, 2)
                     .background(BarLensPalette.badgeFill(selectedSection.tone, in: colorScheme), in: Capsule())
+                if selectedSection == .visible && engine.tuckedOverflowCount > 0 {
+                    let tealInk = BarLensPalette.ink(.teal, in: colorScheme)
+                    Text(tr("暂收 \(engine.tuckedOverflowCount)", "\(engine.tuckedOverflowCount) Tucked"))
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(tealInk)
+                        .padding(.horizontal, 6.5)
+                        .padding(.vertical, 2)
+                        .background(BarLensPalette.badgeFill(.teal, in: colorScheme), in: Capsule())
+                }
                 Spacer()
                 if catalog.isLoading {
                     ProgressView().controlSize(.mini)
@@ -245,6 +254,15 @@ struct QuickPanelView: View {
                                     .font(.system(size: 12))
                                     .foregroundStyle(.primary)
                                     .lineLimit(1)
+                                if let statusBadge = row.statusBadge {
+                                    Text(statusBadge.text)
+                                        .font(.system(size: 9.5, weight: .semibold))
+                                        .foregroundStyle(BarLensPalette.ink(statusBadge.tone, in: colorScheme))
+                                        .lineLimit(1)
+                                        .padding(.horizontal, 5.5)
+                                        .padding(.vertical, 1.5)
+                                        .background(BarLensPalette.badgeFill(statusBadge.tone, in: colorScheme), in: Capsule())
+                                }
                                 Spacer(minLength: 6)
                                 Menu {
                                     rowMenuItems(for: row)
@@ -328,6 +346,20 @@ struct QuickPanelView: View {
         }
         switch row.target {
         case .app(let bundleID, let isClassified):
+            if selectedSection == .visible, engine.spatialBudgetPolicy != .off {
+                Divider()
+                let exempt = engine.isSpatiallyExempt(bundleID)
+                Button {
+                    engine.toggleSpatialExemption(for: bundleID)
+                } label: {
+                    Label(
+                        exempt
+                            ? tr("取消顶栏锁定常驻", "Unpin from Top Bar")
+                            : tr("锁定顶栏常驻（免暂收）", "Pin to Top Bar (Never Tuck)"),
+                        systemImage: exempt ? "pin.slash" : "pin.fill"
+                    )
+                }
+            }
             if isClassified {
                 Divider()
                 if row.isRunning {
@@ -479,20 +511,36 @@ struct QuickPanelView: View {
     private var previewRows: [QuickPanelRow] {
         let apps = catalog.entries
             .filter { $0.isRunning && $0.itemCount > 0 && effective(engine.model.section(of: $0.bundleID)) == selectedSection }
-            .map {
-                let status = !$0.isClassified && engine.unclassifiedSection != .visible ? tr("默认", "Default") : tr("运行中", "Running")
-                return QuickPanelRow(id: "app:" + $0.bundleID, title: $0.displayName, icon: $0.icon,
-                                     symbol: "app", detail: status, isRunning: true,
-                                     target: .app(bundleID: $0.bundleID, isClassified: $0.isClassified))
+            .map { entry -> QuickPanelRow in
+                let isTucked = engine.overflowDemotedBundleIDs.contains(entry.bundleID)
+                let status = isTucked
+                    ? tr("容量暂收", "Tucked")
+                    : (!entry.isClassified && engine.unclassifiedSection != .visible ? tr("默认", "Default") : tr("运行中", "Running"))
+                let badge: QuickPanelRow.StatusBadge?
+                if engine.lensTelemetryEnabled, let unread = entry.telemetry.unreadBadge {
+                    badge = .init(text: unread, tone: .orange)
+                } else if engine.lensTelemetryEnabled, let chip = entry.telemetry.shortChip {
+                    badge = .init(text: chip, tone: .cyan)
+                } else if isTucked {
+                    badge = .init(text: tr("暂收", "Tucked"), tone: .teal)
+                } else {
+                    badge = nil
+                }
+                return QuickPanelRow(id: "app:" + entry.bundleID, title: entry.displayName, icon: entry.icon,
+                                     symbol: "app", detail: status, statusBadge: badge, isRunning: true,
+                                     target: .app(bundleID: entry.bundleID, isClassified: entry.isClassified))
             }
         let system = engine.activeSystemItems
             .filter { effective(engine.systemItems.section(of: $0)) == selectedSection }
-            .map {
-                let classified = engine.systemItems.isClassified($0)
-                return QuickPanelRow(id: "system:" + $0.identifier, title: $0.title, icon: nil,
-                                     symbol: $0.symbol, detail: classified ? tr("系统项目", "System") : tr("系统 · 默认", "System · Default"),
+            .map { sysItem -> QuickPanelRow in
+                let classified = engine.systemItems.isClassified(sysItem)
+                let sysTel = engine.telemetry(for: sysItem)
+                let badge: QuickPanelRow.StatusBadge? = sysTel.shortChip.map { .init(text: $0, tone: .cyan) }
+                return QuickPanelRow(id: "system:" + sysItem.identifier, title: sysItem.title, icon: nil,
+                                     symbol: sysItem.symbol, detail: classified ? tr("系统项目", "System") : tr("系统 · 默认", "System · Default"),
+                                     statusBadge: badge,
                                      isRunning: true,
-                                     target: .system($0, isClassified: classified))
+                                     target: .system(sysItem, isClassified: classified))
             }
         return (apps + system).sorted {
             $0.title.localizedStandardCompare($1.title) == .orderedAscending
@@ -521,6 +569,11 @@ struct QuickPanelView: View {
 }
 
 private struct QuickPanelRow: Identifiable {
+    struct StatusBadge {
+        let text: String
+        let tone: SemanticTone
+    }
+
     enum Target {
         case app(bundleID: String, isClassified: Bool)
         case system(SystemItem, isClassified: Bool)
@@ -531,6 +584,7 @@ private struct QuickPanelRow: Identifiable {
     let icon: NSImage?
     let symbol: String
     let detail: String
+    var statusBadge: StatusBadge? = nil
     let isRunning: Bool
     let target: Target
 }

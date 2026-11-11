@@ -227,6 +227,23 @@ struct AppearanceSettingsView: View {
                         )
                     }
                     .pickerStyle(.segmented)
+
+                    Toggle(isOn: Binding(
+                        get: { engine.lensTelemetryEnabled },
+                        set: { enabled in
+                            withAnimation(.easeOut(duration: 0.16)) {
+                                engine.setLensTelemetryEnabled(enabled)
+                            }
+                        }
+                    )) {
+                        AppearanceRowLabel(
+                            symbol: "viewfinder",
+                            tone: .teal,
+                            title: tr("透镜状态透视", "Semantic Lens HUD"),
+                            isSubItem: true
+                        )
+                    }
+                    .toggleStyle(.switch)
                 }
             }
 
@@ -311,13 +328,17 @@ struct AppearanceSettingsView: View {
                 simulatedTopMenuBar
 
                 if engine.revealPresentationStyle == .floatingBar {
-                    VStack(spacing: 7) {
+                    VStack(spacing: 5) {
                         previewFloatingCapsule
-                            .padding(.top, 5)
+                            .padding(.top, 4)
 
-                        Text(tr("点按图标可测试激活高亮", "Click an icon to test active highlight"))
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(menuBarInk.opacity(0.88))
+                        if engine.lensTelemetryEnabled {
+                            previewLensReadoutPill
+                        } else {
+                            Text(tr("点按图标可测试激活高亮", "Click an icon to test active highlight"))
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(menuBarInk.opacity(0.88))
+                        }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .transition(.opacity.combined(with: .move(edge: .top)))
@@ -351,13 +372,48 @@ struct AppearanceSettingsView: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 124)
+        .frame(height: 130)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.8)
         }
         .animation(.spring(response: 0.28, dampingFraction: 0.86), value: engine.revealPresentationStyle)
+        .animation(.easeOut(duration: 0.16), value: engine.lensTelemetryEnabled)
+    }
+
+    private var previewLensReadoutPill: some View {
+        let sampleLabels: [(name: String, state: String)] = [
+            (tr("网络代理", "Proxy"), tr("系统代理: off · TUN: on", "System Proxy: off · TUN: on")),
+            (tr("电源监控", "Power"), tr("86% · 正在充电", "86% · Charging")),
+            (tr("终端守护", "Terminal"), tr("Today: 180M tokens", "Today: 180M tokens")),
+        ]
+        let idx = (0..<sampleLabels.count).contains(sampleActiveIndex) ? sampleActiveIndex : 1
+        let item = sampleLabels[idx]
+        let cyanInk = BarLensPalette.ink(.cyan, in: colorScheme)
+
+        return HStack(spacing: 6) {
+            Image(systemName: "viewfinder")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(cyanInk)
+            Text(item.name)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(.primary)
+            Text("·")
+                .font(.system(size: 10.5, weight: .bold))
+                .foregroundStyle(.primary.opacity(0.45))
+            Text(item.state)
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(cyanInk)
+        }
+        .padding(.horizontal, 11)
+        .frame(height: 23)
+        .previewCapsuleGlass(cornerRadius: 11.5)
+        .shadow(
+            color: .black.opacity(colorScheme == .dark ? 0.28 : 0.10),
+            radius: 4,
+            y: 2
+        )
     }
 
     private var simulatedTopMenuBar: some View {

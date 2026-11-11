@@ -416,6 +416,7 @@ final class DividerController: NSObject, NSPopoverDelegate {
     private func refresh() {
         let hidden = engine.revealableCount
         let always = engine.alwaysHiddenCount
+        let tucked = engine.tuckedOverflowCount
         let state: String
         if engine.nextRetryAt != nil {
             state = tr("等待自动重连", "Waiting to reconnect")
@@ -423,9 +424,9 @@ final class DividerController: NSObject, NSPopoverDelegate {
             state = tr("正在恢复菜单栏连接", "Recovering menu bar connection")
         } else if let error = engine.connectionError ?? engine.lastError {
             state = tr("提示：\(error)", "Notice: \(error)")
-        } else if !engine.isConfigured {
+        } else if !engine.isConfigured && tucked == 0 {
             state = tr("尚未划分，打开设置指定要隐藏的应用", "Not configured yet — open Settings to assign apps")
-        } else if hidden == 0 && always == 0 {
+        } else if hidden == 0 && always == 0 && tucked == 0 {
             state = tr("所有图标保持显示", "All items remain visible")
         } else if engine.reveal == .all {
             state = tr(
@@ -437,9 +438,12 @@ final class DividerController: NSObject, NSPopoverDelegate {
                 ? tr("可隐藏分区已展开 · 永久隐藏 \(always) 项", "Hidden Section Revealed · Always Hidden: \(always)")
                 : tr("可隐藏分区已展开（\(hidden) 项）", "Hidden Section Revealed (\(hidden))")
         } else {
-            state = engine.alwaysHiddenEnabled
+            let base = engine.alwaysHiddenEnabled
                 ? tr("可隐藏 \(hidden) 项 · 永久隐藏 \(always) 项", "Hidden: \(hidden) · Always Hidden: \(always)")
                 : tr("可隐藏 \(hidden) 项", "Hidden: \(hidden)")
+            state = tucked > 0
+                ? base + tr(" · 容量暂收 \(tucked) 项", " · Tucked: \(tucked)")
+                : base
         }
         let gestureHint = engine.alwaysHiddenEnabled
             ? tr("单击展开 / 收起 · 双击全部显示 · 右键快速检视", "Click: Toggle Hidden · Double-Click: Reveal All · Right-Click: Quick Panel")
