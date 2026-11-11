@@ -1,7 +1,6 @@
 import AppKit
 import Combine
 import SwiftUI
-import UniformTypeIdentifiers
 
 /// Borderless panel that does not let AppKit clamp `frame.maxY` to `visibleFrame.maxY`,
 /// allowing the capsule's top shadow padding to overlap the menu bar bottom edge
@@ -42,6 +41,11 @@ final class FloatingBarController {
 
     var isShown: Bool {
         panel?.isVisible == true
+    }
+
+    var panelScreenFrame: NSRect? {
+        guard isShown, let panel else { return nil }
+        return panel.frame
     }
 
     func update(relativeTo button: NSStatusBarButton?) {
@@ -149,7 +153,7 @@ final class FloatingBarController {
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown]
         ) { [weak self] event in
-            guard let self, self.isShown else { return }
+            guard let self, self.isShown, !self.engine.isContextMenuOpen else { return }
             if Date().timeIntervalSince(ItemEnumerator.lastSyntheticClickAt) < 0.25 {
                 return
             }
@@ -165,7 +169,7 @@ final class FloatingBarController {
         localClickMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown]
         ) { [weak self] event in
-            guard let self, self.isShown, let panel = self.panel else { return event }
+            guard let self, self.isShown, !self.engine.isContextMenuOpen, let panel = self.panel else { return event }
             if event.window === panel
                 || event.window === statusButtonWindow
                 || event.window?.title == "BarLens"
@@ -344,65 +348,11 @@ struct FloatingBarView: View {
 
             FloatingBarSeparator()
 
-            Button(action: onOpenSettings) {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.primary.opacity(0.86))
-                    .frame(width: 38, height: 38)
-                    .contentShape(Circle())
-            }
-            .buttonStyle(FloatingBarIconStyle(isActive: false))
-            .help(tr("打开设置（右键可快速切换外观模式）", "Open Settings (Right-click for Appearance & Language)"))
-            .contextMenu {
-                Section(tr("悬浮栏图标", "Floating Bar Icons")) {
-                    ForEach(FloatingBarIconDisplayStyle.allCases) { style in
-                        Button {
-                            engine.setFloatingBarIconStyle(style)
-                        } label: {
-                            Label(
-                                style.title,
-                                systemImage: engine.floatingBarIconStyle == style ? "checkmark.circle.fill" : style.symbol
-                            )
-                        }
-                    }
-                }
-                Section(tr("外观模式", "Appearance Mode")) {
-                    ForEach(AppearanceMode.allCases) { mode in
-                        Button {
-                            engine.setAppearanceMode(mode)
-                        } label: {
-                            Label(
-                                mode.title,
-                                systemImage: engine.appearanceMode == mode ? "checkmark.circle.fill" : mode.symbol
-                            )
-                        }
-                    }
-                }
-                Section(tr("界面语言", "Interface Language")) {
-                    ForEach(AppLanguage.allCases) { lang in
-                        Button {
-                            engine.setAppLanguage(lang)
-                        } label: {
-                            Label(
-                                lang.title,
-                                systemImage: engine.appLanguage == lang ? "checkmark.circle.fill" : "globe"
-                            )
-                        }
-                    }
-                }
-                if !engine.floatingBarOrder.isEmpty {
-                    Divider()
-                    Button {
-                        withAnimation(.easeOut(duration: 0.18)) {
-                            engine.resetFloatingBarOrder()
-                        }
-                    } label: {
-                        Label(tr("重置图标排序", "Reset Icon Order"), systemImage: "arrow.counterclockwise")
-                    }
-                }
-                Divider()
-                Button(tr("打开设置…", "Open Settings…"), action: onOpenSettings)
-            }
+            FloatingBarGearButton(
+                engine: engine,
+                onOpenSettings: onOpenSettings,
+                onExpandInline: onExpandInline
+            )
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
@@ -455,11 +405,122 @@ private struct FloatingBarItem: Identifiable {
     let target: Target
 }
 
+private struct FloatingBarGearButton: View {
+    @ObservedObject var engine: DividerEngine
+    let onOpenSettings: () -> Void
+    let onExpandInline: () -> Void
+    @State private var hovered = false
+    @State private var pressed = false
+
+    var body: some View {
+        FloatingBarCircleChrome(isActive: false, hovered: hovered, isPressed: pressed) {
+            Image(systemName: "gearshape")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.primary.opacity(0.86))
+                .frame(width: 38, height: 38)
+        }
+        .overlay {
+            FloatingBarItemMouseBridge(
+                toolTip: tr("点按打开设置 · 右键打开快捷菜单", "Click: Open Settings · Right-Click: Quick Actions"),
+                onHoverChanged: { hovered = $0 },
+                onPressedChanged: { pressed = $0 },
+                onClick: onOpenSettings,
+                onDragStarted: nil,
+                onDragOffsetChanged: nil,
+                onStepSwap: nil,
+                onDragEnded: nil,
+                onMenuOpenChanged: { isOpen in
+                    if isOpen {
+                        engine.isContextMenuOpen = true
+                    } else {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                            engine.isContextMenuOpen = false
+                        }
+                    }
+                },
+                buildContextMenu: {
+                    let menu = NSMenu()
+                    menu.autoenablesItems = false
+                    menu.addItem(MenuActionItem(
+                        title: tr("临时切换为菜单栏内展开", "Switch to Inline Menu Bar"),
+                        symbol: "menubar.dock.rectangle",
+                        actionBlock: onExpandInline
+                    ))
+                    menu.addItem(.separator())
+
+                    let iconHeader = NSMenuItem(title: tr("悬浮栏图标样式", "Floating Bar Icons"), action: nil, keyEquivalent: "")
+                    iconHeader.isEnabled = false
+                    menu.addItem(iconHeader)
+                    for style in FloatingBarIconDisplayStyle.allCases {
+                        let item = MenuActionItem(title: style.title, symbol: style.symbol) {
+                            engine.setFloatingBarIconStyle(style)
+                        }
+                        item.state = (engine.floatingBarIconStyle == style) ? .on : .off
+                        menu.addItem(item)
+                    }
+
+                    menu.addItem(.separator())
+                    let modeHeader = NSMenuItem(title: tr("外观模式", "Appearance Mode"), action: nil, keyEquivalent: "")
+                    modeHeader.isEnabled = false
+                    menu.addItem(modeHeader)
+                    for mode in AppearanceMode.allCases {
+                        let item = MenuActionItem(title: mode.title, symbol: mode.symbol) {
+                            engine.setAppearanceMode(mode)
+                        }
+                        item.state = (engine.appearanceMode == mode) ? .on : .off
+                        menu.addItem(item)
+                    }
+
+                    menu.addItem(.separator())
+                    let langHeader = NSMenuItem(title: tr("界面语言", "Interface Language"), action: nil, keyEquivalent: "")
+                    langHeader.isEnabled = false
+                    menu.addItem(langHeader)
+                    for lang in AppLanguage.allCases {
+                        let item = MenuActionItem(title: lang.title, symbol: "globe") {
+                            engine.setAppLanguage(lang)
+                        }
+                        item.state = (engine.appLanguage == lang) ? .on : .off
+                        menu.addItem(item)
+                    }
+
+                    if !engine.floatingBarOrder.isEmpty {
+                        menu.addItem(.separator())
+                        menu.addItem(MenuActionItem(
+                            title: tr("重置悬浮栏图标排序", "Reset Icon Order"),
+                            symbol: "arrow.counterclockwise"
+                        ) {
+                            withAnimation(.easeOut(duration: 0.18)) {
+                                engine.resetFloatingBarOrder()
+                            }
+                        })
+                    }
+
+                    menu.addItem(.separator())
+                    menu.addItem(MenuActionItem(
+                        title: tr("打开设置…", "Open Settings…"),
+                        symbol: "gearshape",
+                        actionBlock: onOpenSettings
+                    ))
+                    return menu
+                }
+            )
+        }
+    }
+}
+
 private struct FloatingBarItemButton: View {
     let item: FloatingBarItem
     let siblingIDs: [String]
     @ObservedObject var engine: DividerEngine
     @Binding var draggedItemID: String?
+
+    @State private var hovered = false
+    @State private var pressed = false
+    @State private var dragOffsetX: CGFloat = 0
+
+    private var isDraggingThis: Bool {
+        draggedItemID == item.id
+    }
 
     private var isActive: Bool {
         switch item.target {
@@ -470,15 +531,21 @@ private struct FloatingBarItemButton: View {
         }
     }
 
+    private func triggerItem() {
+        switch item.target {
+        case .app(let bundleID, _):
+            engine.activateFromFloatingBar(bundleID: bundleID)
+        case .system(let sysItem, _):
+            engine.activateFromFloatingBar(systemItem: sysItem)
+        }
+    }
+
     var body: some View {
-        Button {
-            switch item.target {
-            case .app(let bundleID, _):
-                engine.activateFromFloatingBar(bundleID: bundleID)
-            case .system(let sysItem, _):
-                engine.activateFromFloatingBar(systemItem: sysItem)
-            }
-        } label: {
+        FloatingBarCircleChrome(
+            isActive: isActive,
+            hovered: hovered || isDraggingThis,
+            isPressed: pressed
+        ) {
             ZStack(alignment: .bottomTrailing) {
                 if let icon = item.icon {
                     if item.isTemplateIcon {
@@ -521,117 +588,185 @@ private struct FloatingBarItemButton: View {
                 }
             }
             .frame(width: 38, height: 38)
-            .contentShape(Circle())
         }
-        .buttonStyle(FloatingBarIconStyle(isActive: isActive))
-        .opacity(draggedItemID == item.id ? 0.55 : 1.0)
-        .onDrag {
-            draggedItemID = item.id
-            return NSItemProvider(object: item.id as NSString)
-        }
-        .onDrop(
-            of: [UTType.plainText],
-            delegate: FloatingBarDropDelegate(
-                targetID: item.id,
-                siblingIDs: siblingIDs,
-                engine: engine,
-                draggedItemID: $draggedItemID
-            )
-        )
-        .help(tr("\(item.title) · 点按打开菜单 · 拖拽可调整顺序", "\(item.title) · Click to toggle menu · Drag to reorder"))
-        .contextMenu {
-            let choices: [SectionModel.Section] = engine.alwaysHiddenEnabled
-                ? [.visible, .hidden, .alwaysHidden]
-                : [.visible, .hidden]
-            ForEach(choices, id: \.self) { section in
-                Button {
-                    switch item.target {
-                    case .app(let bundleID, _):
-                        engine.setSection(section, for: bundleID)
-                    case .system(let sysItem, _):
-                        engine.setSection(section, for: sysItem)
+        .scaleEffect(isDraggingThis ? 1.10 : 1.0)
+        .offset(x: dragOffsetX)
+        .zIndex(isDraggingThis ? 20 : 0)
+        .overlay {
+            FloatingBarItemMouseBridge(
+                toolTip: tr("\(item.title) · 点按打开菜单 · 按住左右拖拽排序 · 右键快捷操作", "\(item.title) · Click: Menu · Drag: Reorder · Right-Click: Actions"),
+                onHoverChanged: { hovered = $0 },
+                onPressedChanged: { pressed = $0 },
+                onClick: triggerItem,
+                onDragStarted: {
+                    draggedItemID = item.id
+                },
+                onDragOffsetChanged: { dx in
+                    dragOffsetX = dx
+                },
+                onStepSwap: { stepDelta in
+                    let latestSiblings = engine.floatingBarOrder.sorted(siblingIDs, id: { $0 })
+                    guard let currentIdx = latestSiblings.firstIndex(of: item.id) else { return false }
+                    let nextIdx = currentIdx + stepDelta
+                    guard latestSiblings.indices.contains(nextIdx) else { return false }
+                    withAnimation(.spring(response: 0.22, dampingFraction: 0.84)) {
+                        engine.moveFloatingBarItemByStep(item.id, delta: stepDelta, within: latestSiblings)
                     }
-                } label: {
-                    Label(section.title, systemImage: section.symbol)
+                    return true
+                },
+                onDragEnded: {
+                    withAnimation(.spring(response: 0.22, dampingFraction: 0.84)) {
+                        dragOffsetX = 0
+                        draggedItemID = nil
+                    }
+                },
+                onMenuOpenChanged: { isOpen in
+                    if isOpen {
+                        engine.isContextMenuOpen = true
+                    } else {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                            engine.isContextMenuOpen = false
+                        }
+                    }
+                },
+                buildContextMenu: {
+                    buildItemContextMenu()
+                }
+            )
+        }
+    }
+
+    private func buildItemContextMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+
+        let header = NSMenuItem(title: item.title, action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+
+        menu.addItem(MenuActionItem(
+            title: tr("打开 / 收起菜单", "Open / Toggle Menu"),
+            symbol: "menubar.arrow.down.rectangle",
+            actionBlock: triggerItem
+        ))
+
+        let orderedSiblings = engine.floatingBarOrder.sorted(siblingIDs, id: { $0 })
+        if orderedSiblings.count > 1, let idx = orderedSiblings.firstIndex(of: item.id) {
+            menu.addItem(.separator())
+            let orderHeader = NSMenuItem(title: tr("图标排序", "Icon Order"), action: nil, keyEquivalent: "")
+            orderHeader.isEnabled = false
+            menu.addItem(orderHeader)
+
+            if idx > 0 {
+                menu.addItem(MenuActionItem(
+                    title: tr("向左移一位", "Move Left"),
+                    symbol: "arrow.left"
+                ) {
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        engine.moveFloatingBarItemByStep(item.id, delta: -1, within: orderedSiblings)
+                    }
+                })
+                if orderedSiblings.count > 2 {
+                    menu.addItem(MenuActionItem(
+                        title: tr("移至最前", "Move to Front"),
+                        symbol: "arrow.left.to.line"
+                    ) {
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            engine.moveFloatingBarItemToEdge(item.id, toFront: true, within: orderedSiblings)
+                        }
+                    })
                 }
             }
-            if siblingIDs.count > 1 {
-                Divider()
-                if siblingIDs.first != item.id {
-                    Button {
-                        withAnimation(.easeOut(duration: 0.18)) {
-                            engine.moveFloatingBarItemToEdge(item.id, toFront: true, within: siblingIDs)
-                        }
-                    } label: {
-                        Label(tr("移至最前", "Move to Front"), systemImage: "arrow.left.to.line")
+            if idx < orderedSiblings.count - 1 {
+                menu.addItem(MenuActionItem(
+                    title: tr("向右移一位", "Move Right"),
+                    symbol: "arrow.right"
+                ) {
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        engine.moveFloatingBarItemByStep(item.id, delta: 1, within: orderedSiblings)
                     }
-                }
-                if siblingIDs.last != item.id {
-                    Button {
+                })
+                if orderedSiblings.count > 2 {
+                    menu.addItem(MenuActionItem(
+                        title: tr("移至最后", "Move to End"),
+                        symbol: "arrow.right.to.line"
+                    ) {
                         withAnimation(.easeOut(duration: 0.18)) {
-                            engine.moveFloatingBarItemToEdge(item.id, toFront: false, within: siblingIDs)
+                            engine.moveFloatingBarItemToEdge(item.id, toFront: false, within: orderedSiblings)
                         }
-                    } label: {
-                        Label(tr("移至最后", "Move to End"), systemImage: "arrow.right.to.line")
-                    }
+                    })
                 }
             }
             if !engine.floatingBarOrder.isEmpty {
-                Divider()
-                Button {
+                menu.addItem(MenuActionItem(
+                    title: tr("重置图标排序", "Reset Icon Order"),
+                    symbol: "arrow.counterclockwise"
+                ) {
                     withAnimation(.easeOut(duration: 0.18)) {
                         engine.resetFloatingBarOrder()
                     }
-                } label: {
-                    Label(tr("重置图标排序", "Reset Icon Order"), systemImage: "arrow.counterclockwise")
+                })
+            }
+        }
+
+        menu.addItem(.separator())
+        let secHeader = NSMenuItem(title: tr("移至分区", "Move to Section"), action: nil, keyEquivalent: "")
+        secHeader.isEnabled = false
+        menu.addItem(secHeader)
+
+        let choices: [SectionModel.Section] = engine.alwaysHiddenEnabled
+            ? [.visible, .hidden, .alwaysHidden]
+            : [.visible, .hidden]
+        for section in choices {
+            let menuItem = MenuActionItem(title: section.title, symbol: section.symbol) {
+                switch item.target {
+                case .app(let bundleID, _):
+                    engine.setSection(section, for: bundleID)
+                case .system(let sysItem, _):
+                    engine.setSection(section, for: sysItem)
+                }
+            }
+            menuItem.state = (item.section == section) ? .on : .off
+            menu.addItem(menuItem)
+        }
+
+        if case .app(let bundleID, _) = item.target {
+            let runningApp = NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == bundleID }
+            let appURL = runningApp?.bundleURL ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+            if appURL != nil || runningApp != nil {
+                menu.addItem(.separator())
+                if let appURL {
+                    menu.addItem(MenuActionItem(
+                        title: tr("在访达中显示", "Show in Finder"),
+                        symbol: "folder"
+                    ) {
+                        NSWorkspace.shared.activateFileViewerSelecting([appURL])
+                    })
+                }
+                if let runningApp {
+                    menu.addItem(MenuActionItem(
+                        title: tr("退出 \(item.title)", "Quit \(item.title)"),
+                        symbol: "xmark.circle"
+                    ) {
+                        runningApp.terminate()
+                    })
                 }
             }
         }
+
+        return menu
     }
 }
 
-private struct FloatingBarDropDelegate: DropDelegate {
-    let targetID: String
-    let siblingIDs: [String]
-    let engine: DividerEngine
-    @Binding var draggedItemID: String?
-
-    func dropEntered(info: DropInfo) {
-        guard let draggedID = draggedItemID,
-              draggedID != targetID,
-              siblingIDs.contains(draggedID),
-              siblingIDs.contains(targetID) else { return }
-        withAnimation(.spring(response: 0.24, dampingFraction: 0.82)) {
-            engine.moveFloatingBarItem(draggedID, to: targetID, within: siblingIDs)
-        }
-    }
-
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-        DropProposal(operation: .move)
-    }
-
-    func performDrop(info: DropInfo) -> Bool {
-        draggedItemID = nil
-        return true
-    }
-}
-
-private struct FloatingBarIconStyle: ButtonStyle {
-    var isActive: Bool = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        FloatingBarIconFeedback(configuration: configuration, isActive: isActive)
-    }
-}
-
-private struct FloatingBarIconFeedback: View {
-    let configuration: ButtonStyleConfiguration
+private struct FloatingBarCircleChrome<Content: View>: View {
     let isActive: Bool
-    @State private var hovered = false
+    let hovered: Bool
+    let isPressed: Bool
+    @ViewBuilder var content: () -> Content
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        configuration.label
+        content()
             .background {
                 if isActive {
                     Circle()
@@ -669,11 +804,212 @@ private struct FloatingBarIconFeedback: View {
                         )
                 }
             }
-            .scaleEffect(configuration.isPressed ? 0.92 : (hovered ? 1.04 : 1.0))
-            .offset(y: hovered && !configuration.isPressed ? -0.5 : 0)
+            .scaleEffect(isPressed ? 0.92 : (hovered ? 1.04 : 1.0))
+            .offset(y: hovered && !isPressed ? -0.5 : 0)
             .animation(.easeOut(duration: 0.16), value: hovered)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
-            .onHover { hovered = $0 }
+            .animation(.easeOut(duration: 0.12), value: isPressed)
+    }
+}
+
+private final class MenuActionItem: NSMenuItem {
+    private let actionBlock: () -> Void
+
+    init(title: String, symbol: String? = nil, actionBlock: @escaping () -> Void) {
+        self.actionBlock = actionBlock
+        super.init(title: title, action: #selector(invoke(_:)), keyEquivalent: "")
+        self.target = self
+        if let symbol, let img = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) {
+            let cfg = NSImage.SymbolConfiguration(pointSize: 12.5, weight: .regular)
+            self.image = img.withSymbolConfiguration(cfg) ?? img
+        }
+    }
+
+    required init(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    @objc private func invoke(_ sender: Any?) {
+        actionBlock()
+    }
+}
+
+private struct FloatingBarItemMouseBridge: NSViewRepresentable {
+    let toolTip: String
+    let onHoverChanged: (Bool) -> Void
+    let onPressedChanged: (Bool) -> Void
+    let onClick: () -> Void
+    let onDragStarted: (() -> Void)?
+    let onDragOffsetChanged: ((CGFloat) -> Void)?
+    let onStepSwap: ((Int) -> Bool)?
+    let onDragEnded: (() -> Void)?
+    let onMenuOpenChanged: (Bool) -> Void
+    let buildContextMenu: () -> NSMenu
+
+    func makeNSView(context: Context) -> FloatingBarItemMouseView {
+        let view = FloatingBarItemMouseView()
+        applyCallbacks(to: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: FloatingBarItemMouseView, context: Context) {
+        applyCallbacks(to: nsView)
+    }
+
+    private func applyCallbacks(to view: FloatingBarItemMouseView) {
+        view.toolTip = toolTip
+        view.onHoverChanged = onHoverChanged
+        view.onPressedChanged = onPressedChanged
+        view.onClick = onClick
+        view.onDragStarted = onDragStarted
+        view.onDragOffsetChanged = onDragOffsetChanged
+        view.onStepSwap = onStepSwap
+        view.onDragEnded = onDragEnded
+        view.onMenuOpenChanged = onMenuOpenChanged
+        view.buildContextMenu = buildContextMenu
+    }
+}
+
+/// Native AppKit mouse handler for icons inside the non-activating FloatingBarPanel.
+/// Accepts first-mouse events without activating BarLens, tracks screen-space
+/// horizontal dragging for 1:1 icon reordering, and presents a native NSMenu on right-click.
+private final class FloatingBarItemMouseView: NSView {
+    var onHoverChanged: ((Bool) -> Void)?
+    var onPressedChanged: ((Bool) -> Void)?
+    var onClick: (() -> Void)?
+    var onDragStarted: (() -> Void)?
+    var onDragOffsetChanged: ((CGFloat) -> Void)?
+    var onStepSwap: ((Int) -> Bool)?
+    var onDragEnded: (() -> Void)?
+    var onMenuOpenChanged: ((Bool) -> Void)?
+    var buildContextMenu: (() -> NSMenu)?
+
+    private var trackingArea: NSTrackingArea?
+    private var isTrackingLeftMouse = false
+    private var didEnterDrag = false
+    private var anchorScreenX: CGFloat = 0
+    private var anchorScreenY: CGFloat = 0
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        onHoverChanged?(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        if !isTrackingLeftMouse {
+            onHoverChanged?(false)
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.control) {
+            presentContextMenu(with: event)
+            return
+        }
+        isTrackingLeftMouse = true
+        didEnterDrag = false
+        let mouse = NSEvent.mouseLocation
+        anchorScreenX = mouse.x
+        anchorScreenY = mouse.y
+        onPressedChanged?(true)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard isTrackingLeftMouse else { return }
+        guard onDragStarted != nil else { return }
+        let mouse = NSEvent.mouseLocation
+        var dx = mouse.x - anchorScreenX
+        let dy = mouse.y - anchorScreenY
+
+        if !didEnterDrag {
+            guard hypot(dx, dy) >= 5.0 else { return }
+            didEnterDrag = true
+            onPressedChanged?(false)
+            onDragStarted?()
+        }
+
+        if let onStepSwap {
+            let slotStride: CGFloat = 45.0
+            let swapThreshold: CGFloat = 23.0
+            while dx >= swapThreshold && onStepSwap(1) {
+                anchorScreenX += slotStride
+                dx -= slotStride
+            }
+            while dx <= -swapThreshold && onStepSwap(-1) {
+                anchorScreenX -= slotStride
+                dx += slotStride
+            }
+        }
+        onDragOffsetChanged?(max(-34, min(34, dx)))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard isTrackingLeftMouse else { return }
+        isTrackingLeftMouse = false
+        onPressedChanged?(false)
+
+        if didEnterDrag {
+            didEnterDrag = false
+            onDragEnded?()
+        } else {
+            let localPt = convert(event.locationInWindow, from: nil)
+            if bounds.insetBy(dx: -4, dy: -4).contains(localPt) {
+                onClick?()
+            }
+        }
+
+        let localNow = window.map { convert($0.mouseLocationOutsideOfEventStream, from: nil) } ?? .zero
+        if !bounds.contains(localNow) {
+            onHoverChanged?(false)
+        }
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        buildContextMenu?()
+    }
+
+    override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        super.willOpenMenu(menu, with: event)
+        isTrackingLeftMouse = false
+        didEnterDrag = false
+        onPressedChanged?(false)
+        onMenuOpenChanged?(true)
+    }
+
+    override func didCloseMenu(_ menu: NSMenu, with event: NSEvent?) {
+        super.didCloseMenu(menu, with: event)
+        onMenuOpenChanged?(false)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        presentContextMenu(with: event)
+    }
+
+    private func presentContextMenu(with event: NSEvent) {
+        guard let menu = buildContextMenu?() else { return }
+        isTrackingLeftMouse = false
+        didEnterDrag = false
+        onPressedChanged?(false)
+        onMenuOpenChanged?(true)
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+        onMenuOpenChanged?(false)
     }
 }
 

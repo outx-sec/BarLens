@@ -98,8 +98,8 @@ struct GeneralSettingsView: View {
                     GestureRow(symbol: "cursorarrow.click.2", title: tr("双击图标", "Double Click"),
                                detail: tr("展开 / 收起全部", "Toggle All Sections"))
                 }
-                GestureRow(symbol: "arrow.up.and.down.circle", title: tr("滚轮上下滑动", "Scroll Up / Down"),
-                           detail: tr("下滑逐级展开 · 上滑收起", "Scroll Down to Reveal · Up to Collapse"))
+                GestureRow(symbol: "arrow.up.and.down.circle", title: tr("滚轮 / 触控板滑动", "Scroll / Trackpad Swipe"),
+                           detail: tr("下滑 / 左滑展开 · 上滑 / 右滑收起", "Swipe Down/Left to Reveal · Up/Right to Collapse"))
                 GestureRow(symbol: "computermouse", title: tr("右键图标", "Right Click"),
                            detail: tr("打开速览面板", "Open Quick Panel"))
                 GestureRow(symbol: "arrow.left.and.right", title: tr("⌘ + 拖拽", "⌘ + Drag"),

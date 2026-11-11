@@ -183,6 +183,11 @@ final class DividerEngine: ObservableObject {
             if isFloatingBarHovered != oldValue { scheduleAutoRehideIfNeeded() }
         }
     }
+    var isContextMenuOpen = false {
+        didSet {
+            if isContextMenuOpen != oldValue { scheduleAutoRehideIfNeeded() }
+        }
+    }
     private var lastAgentStart = Date.distantPast
     private var lastMenuBarAgentPID: pid_t?
     private var operationGeneration = 0
@@ -1379,7 +1384,14 @@ final class DividerEngine: ObservableObject {
         guard updated != floatingBarOrder else { return }
         floatingBarOrder = updated
         Defaults.floatingBarOrder = updated
-        onChange?()
+    }
+
+    func moveFloatingBarItemByStep(_ itemID: String, delta: Int, within currentIDs: [String]) {
+        var updated = floatingBarOrder
+        updated.moveByStep(itemID: itemID, delta: delta, within: currentIDs)
+        guard updated != floatingBarOrder else { return }
+        floatingBarOrder = updated
+        Defaults.floatingBarOrder = updated
     }
 
     func moveFloatingBarItemToEdge(_ itemID: String, toFront: Bool, within currentIDs: [String]) {
@@ -1388,7 +1400,6 @@ final class DividerEngine: ObservableObject {
         guard updated != floatingBarOrder else { return }
         floatingBarOrder = updated
         Defaults.floatingBarOrder = updated
-        onChange?()
     }
 
     func resetFloatingBarOrder() {
@@ -1397,7 +1408,6 @@ final class DividerEngine: ObservableObject {
         updated.reset()
         floatingBarOrder = updated
         Defaults.floatingBarOrder = updated
-        onChange?()
     }
 
     func exportProfile() -> BarLensProfile {
@@ -1515,7 +1525,7 @@ final class DividerEngine: ObservableObject {
                   self.reveal != .none, self.autoRehideInterval.seconds != nil else { return }
             let hasActivePopup = self.pinnedBundleID != nil
                 || (self.lastActivatedFromFloatingBar && ItemEnumerator.isControlCenterPopupOpen())
-            if self.isQuickPanelOpen || self.isFloatingBarHovered || Self.isPointerInMenuBarBand() || hasActivePopup {
+            if self.isQuickPanelOpen || self.isFloatingBarHovered || self.isContextMenuOpen || Self.isPointerInMenuBarBand() || hasActivePopup {
                 self.scheduleAutoRehideCheck(after: 1.5)
                 return
             }

@@ -42,8 +42,8 @@ fi
 # Drag-to-install target.
 ln -s /Applications "$STAGE/Applications"
 
-cat > "$STAGE/INSTALL · 安装说明.txt" <<'README'
-BarLens 1.0 — Installation Guide / 安装说明
+cat > "$STAGE/INSTALL · 安装说明.txt" <<README
+BarLens ${VERSION} — Installation Guide / 安装说明
 ===========================================
 
 [English]

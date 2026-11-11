@@ -223,6 +223,14 @@ struct FloatingBarOrder: Equatable, Codable {
         orderedIDs = working
     }
 
+    /// Moves `itemID` one slot earlier (`delta = -1`) or later (`delta = +1`) within `currentIDs`.
+    mutating func moveByStep(itemID: String, delta: Int, within currentIDs: [String]) {
+        guard delta != 0, let idx = currentIDs.firstIndex(of: itemID) else { return }
+        let targetIdx = idx + delta
+        guard currentIDs.indices.contains(targetIdx) else { return }
+        move(itemID: itemID, to: currentIDs[targetIdx], within: currentIDs)
+    }
+
     /// Moves `itemID` to the start or end of the `currentIDs` group.
     mutating func moveToEdge(itemID: String, toFront: Bool, within currentIDs: [String]) {
         guard !currentIDs.isEmpty else { return }

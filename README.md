@@ -79,10 +79,11 @@ BarLens integrates with both `MenuBarClientCore` assessment bitmasks and `com.ap
 | **Left Click** on Trigger | Reveal or collapse the **Hidden** section (Floating Bar or Inline) |
 | **Double Click** on Trigger | Reveal or collapse both **Hidden** and **Always Hidden** sections |
 | **Hover** on Trigger *(Optional)* | Automatically reveal **Hidden** section after configurable dwell (`0.18s / 0.35s / 0.6s`) |
-| **Scroll Down / Up** on Trigger | Stepwise reveal (**Hidden** → **All**) on scroll down; collapse on scroll up |
+| **Scroll / Swipe** on Trigger | Swipe/scroll down or left to reveal (**Hidden** → **All**); up or right to collapse |
 | **Right Click** on Trigger | Open the **Liquid Glass Quick Panel** (section counts, quick toggles, bulk assign) |
 | **Click Icon in Floating Bar** | Open the item's native menu; click the same icon again to close |
-| **Drag Icon in Floating Bar** | Reorder icons inside the Floating Bar with live spring animation |
+| **Drag Icon in Floating Bar** | Reorder icons inside the Floating Bar with live 1:1 spring animation |
+| **Right Click Icon in Floating Bar** | Quick actions: step left/right, move to front/end, switch section, Show in Finder, or Quit app |
 | **Right Click Gear in Floating Bar** | Quick-switch **Appearance Mode**, **Icon Style**, **Language**, or reset icon order |
 | **⌘ + Drag** on Trigger | Reposition the trigger icon anywhere on the macOS menu bar |
 
@@ -96,7 +97,7 @@ BarLens integrates with both `MenuBarClientCore` assessment bitmasks and `com.ap
 - **Accessibility Permission** *(Used to enumerate menu bar items and proxy clicks).*
 
 ### Install from Release DMG / ZIP
-1. Download `BarLens-1.0.dmg` from **Releases** and drag **`BarLens.app`** into **`/Applications`**.
+1. Download `BarLens-1.1.dmg` from **Releases** and drag **`BarLens.app`** into **`/Applications`**.
 2. Clear the quarantine flag on first launch (since open-source builds are self-signed):
    ```bash
    xattr -d com.apple.quarantine /Applications/BarLens.app

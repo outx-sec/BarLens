@@ -278,6 +278,19 @@ final class FloatingBarOrderAndProfileTests: XCTestCase {
             ["sys:wifi", "app:b", "app:a", "sys:clock"]
         )
 
+        order.moveByStep(itemID: "app:b", delta: 1, within: ["sys:wifi", "app:b", "app:a", "sys:clock"])
+        XCTAssertEqual(
+            order.sorted(current, id: { $0 }),
+            ["sys:wifi", "app:a", "app:b", "sys:clock"]
+        )
+
+        order.moveByStep(itemID: "sys:wifi", delta: -1, within: ["sys:wifi", "app:a", "app:b", "sys:clock"])
+        XCTAssertEqual(
+            order.sorted(current, id: { $0 }),
+            ["sys:wifi", "app:a", "app:b", "sys:clock"],
+            "Clamping at leading edge must keep order intact"
+        )
+
         order.reset()
         XCTAssertTrue(order.isEmpty)
         XCTAssertEqual(order.sorted(current, id: { $0 }), current)

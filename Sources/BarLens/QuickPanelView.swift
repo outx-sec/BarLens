@@ -261,6 +261,38 @@ struct QuickPanelView: View {
 
     @ViewBuilder
     private func rowMenuItems(for row: QuickPanelRow) -> some View {
+        Button {
+            onClose()
+            switch row.target {
+            case .app(let bundleID, _):
+                engine.activateFromFloatingBar(bundleID: bundleID)
+            case .system(let item, _):
+                engine.activateFromFloatingBar(systemItem: item)
+            }
+        } label: {
+            Label(tr("打开菜单", "Open Menu"), systemImage: "menubar.arrow.down.rectangle")
+        }
+
+        if selectedSection != .visible, previewRows.count > 1 {
+            let siblingIDs = engine.floatingBarOrder.sorted(previewRows.map(\.id), id: { $0 })
+            Divider()
+            if siblingIDs.first != row.id {
+                Button {
+                    engine.moveFloatingBarItemToEdge(row.id, toFront: true, within: siblingIDs)
+                } label: {
+                    Label(tr("在悬浮栏移至最前", "Move to Front in Floating Bar"), systemImage: "arrow.left.to.line")
+                }
+            }
+            if siblingIDs.last != row.id {
+                Button {
+                    engine.moveFloatingBarItemToEdge(row.id, toFront: false, within: siblingIDs)
+                } label: {
+                    Label(tr("在悬浮栏移至最后", "Move to End in Floating Bar"), systemImage: "arrow.right.to.line")
+                }
+            }
+        }
+
+        Divider()
         let choices: [SectionModel.Section] = engine.alwaysHiddenEnabled
             ? [.visible, .hidden, .alwaysHidden]
             : [.visible, .hidden]
@@ -277,15 +309,32 @@ struct QuickPanelView: View {
             }
         }
         switch row.target {
-        case .app(let bundleID, let isClassified) where isClassified:
-            Divider()
-            if row.isRunning {
-                Button(tr("恢复默认归属", "Reset to Default Section")) {
-                    engine.removeAssignment(for: bundleID)
+        case .app(let bundleID, let isClassified):
+            if isClassified {
+                Divider()
+                if row.isRunning {
+                    Button(tr("恢复默认归属", "Reset to Default Section")) {
+                        engine.removeAssignment(for: bundleID)
+                    }
+                } else {
+                    Button(tr("从列表中移除", "Remove from List"), role: .destructive) {
+                        engine.removeAssignment(for: bundleID)
+                    }
                 }
-            } else {
-                Button(tr("从列表中移除", "Remove from List"), role: .destructive) {
-                    engine.removeAssignment(for: bundleID)
+            }
+            if let runningApp = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) {
+                Divider()
+                if let appURL = runningApp.bundleURL {
+                    Button {
+                        NSWorkspace.shared.activateFileViewerSelecting([appURL])
+                    } label: {
+                        Label(tr("在访达中显示", "Show in Finder"), systemImage: "folder")
+                    }
+                }
+                Button(role: .destructive) {
+                    runningApp.terminate()
+                } label: {
+                    Label(tr("退出 \(row.title)", "Quit \(row.title)"), systemImage: "xmark.circle")
                 }
             }
         case .system(let item, let isClassified) where isClassified:

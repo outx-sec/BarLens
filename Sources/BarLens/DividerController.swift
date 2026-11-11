@@ -24,10 +24,16 @@ final class DividerController: NSObject, NSPopoverDelegate {
     private var proxyItems: [String: NSStatusItem] = [:]
     private var proxyItemTargets: [String: SystemItem] = [:]
     private var rightClickMonitor: Any?
-    private var scrollWheelMonitor: Any?
+    private var localScrollMonitor: Any?
+    private var globalScrollMonitor: Any?
     private var panelKeyMonitor: Any?
     private var hoverRevealWork: DispatchWorkItem?
-    private var lastScrollGestureAt: Date = .distantPast
+    private var lastHandledScrollTimestamp: TimeInterval = -1
+    private var lastScrollSampleAt: Date = .distantPast
+    private var lastDiscreteStepAt: Date = .distantPast
+    private var scrollAccumX: CGFloat = 0
+    private var scrollAccumY: CGFloat = 0
+    private var scrollPhaseConsumed = false
     private var quickPopover: NSPopover?
     private let quickCatalog = Catalog()
     private lazy var floatingBar = FloatingBarController(
@@ -88,8 +94,10 @@ final class DividerController: NSObject, NSPopoverDelegate {
         hoverRevealWork = nil
         if let rightClickMonitor { NSEvent.removeMonitor(rightClickMonitor) }
         rightClickMonitor = nil
-        if let scrollWheelMonitor { NSEvent.removeMonitor(scrollWheelMonitor) }
-        scrollWheelMonitor = nil
+        if let localScrollMonitor { NSEvent.removeMonitor(localScrollMonitor) }
+        localScrollMonitor = nil
+        if let globalScrollMonitor { NSEvent.removeMonitor(globalScrollMonitor) }
+        globalScrollMonitor = nil
         if let panelKeyMonitor { NSEvent.removeMonitor(panelKeyMonitor) }
         panelKeyMonitor = nil
         if let dotItem { NSStatusBar.system.removeStatusItem(dotItem) }
@@ -171,38 +179,153 @@ final class DividerController: NSObject, NSPopoverDelegate {
         }
     }
 
-    /// Scroll down on the trigger icon to reveal hidden items (or step up to
-    /// Always Hidden); scroll up to collapse.
+    /// Scroll or two-finger swipe on the trigger icon (both while BarLens is in
+    /// the background and while active) to reveal or collapse hidden sections:
+    /// - Swipe/scroll down or swipe left on the trigger expands (.none -> .hidden -> .all).
+    /// - Swipe/scroll up or swipe right collapses (.all -> .hidden -> .none).
+    /// - Vertical swipe-up directly over the open Floating Bar also collapses it.
     private func monitorScrollWheel() {
-        scrollWheelMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel]) { [weak self] event in
-            guard let self,
-                  let buttonWindow = self.dotItem?.button?.window,
-                  event.window === buttonWindow else { return event }
-            let dy = event.scrollingDeltaY
-            guard abs(dy) >= 2.0 else { return event }
-            let now = Date()
-            guard now.timeIntervalSince(self.lastScrollGestureAt) >= 0.25 else { return nil }
-            self.lastScrollGestureAt = now
-            self.hoverRevealWork?.cancel()
-            self.hoverRevealWork = nil
-            self.closeQuickPanel(resetClicks: true)
-            let isDownward = event.isDirectionInvertedFromDevice ? (dy > 0) : (dy < 0)
-            if isDownward {
-                if self.engine.reveal == .none {
-                    self.engine.setReveal(.hidden)
-                } else if self.engine.reveal == .hidden, self.engine.alwaysHiddenEnabled {
-                    self.engine.setReveal(.all)
-                }
-            } else {
-                if self.engine.reveal == .all {
-                    self.engine.setReveal(.hidden)
-                } else if self.engine.reveal != .none {
-                    self.engine.setReveal(.none)
-                }
-            }
-            self.refresh()
-            return nil
+        localScrollMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .swipe]) { [weak self] event in
+            guard let self else { return event }
+            return self.handleScrollOrSwipe(event) ? nil : event
         }
+        globalScrollMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.scrollWheel, .swipe]) { [weak self] event in
+            _ = self?.handleScrollOrSwipe(event)
+        }
+    }
+
+    private func isMouseOverDot(at screenPoint: NSPoint) -> Bool {
+        guard let button = dotItem?.button,
+              let buttonWindow = button.window,
+              buttonWindow.isVisible else { return false }
+        let rectInWindow = button.convert(button.bounds, to: nil)
+        let screenRect = buttonWindow.convertToScreen(rectInWindow).insetBy(dx: -6, dy: -4)
+        return screenRect.contains(screenPoint)
+    }
+
+    private func handleScrollOrSwipe(_ event: NSEvent) -> Bool {
+        guard abs(event.timestamp - lastHandledScrollTimestamp) > 0.002 else { return false }
+        let mouse = NSEvent.mouseLocation
+        let overDot = isMouseOverDot(at: mouse)
+        let overFloatingBar = !overDot && (floatingBar.panelScreenFrame?.contains(mouse) == true)
+        guard overDot || overFloatingBar else { return false }
+
+        if event.type == .swipe {
+            lastHandledScrollTimestamp = event.timestamp
+            let dx = CGFloat(event.deltaX)
+            let dy = CGFloat(event.deltaY)
+            let isVertical = abs(dy) >= abs(dx)
+            if overFloatingBar {
+                guard isVertical, dy > 0 else { return false }
+                engine.setReveal(.none)
+                refresh()
+                return true
+            }
+            let expand = isVertical ? (dy < 0) : (dx > 0)
+            applyScrollRevealStep(expand: expand)
+            return true
+        }
+
+        // Ignore trackpad post-lift inertia so a single flick only steps once.
+        if event.momentumPhase != [] {
+            return overDot
+        }
+
+        let now = Date()
+        if event.hasPreciseScrollingDeltas {
+            let rawDX = event.isDirectionInvertedFromDevice ? -event.scrollingDeltaX : event.scrollingDeltaX
+            let rawDY = event.isDirectionInvertedFromDevice ? -event.scrollingDeltaY : event.scrollingDeltaY
+
+            if event.phase == .began || now.timeIntervalSince(lastScrollSampleAt) > 0.28 {
+                scrollAccumX = 0
+                scrollAccumY = 0
+                scrollPhaseConsumed = false
+            }
+            lastScrollSampleAt = now
+
+            if event.phase == .ended || event.phase == .cancelled {
+                let wasConsumed = scrollPhaseConsumed
+                scrollAccumX = 0
+                scrollAccumY = 0
+                scrollPhaseConsumed = false
+                return overDot && wasConsumed
+            }
+
+            if scrollPhaseConsumed {
+                return overDot
+            }
+
+            scrollAccumX += rawDX
+            scrollAccumY += rawDY
+
+            let threshold: CGFloat = 5.0
+            guard abs(scrollAccumY) >= threshold || abs(scrollAccumX) >= threshold else {
+                return false
+            }
+
+            let isVertical = abs(scrollAccumY) >= abs(scrollAccumX)
+            if overFloatingBar {
+                guard isVertical, abs(scrollAccumY) > abs(scrollAccumX) * 1.3, scrollAccumY > 0 else {
+                    return false
+                }
+                lastHandledScrollTimestamp = event.timestamp
+                scrollPhaseConsumed = true
+                engine.setReveal(.none)
+                refresh()
+                return true
+            }
+
+            // rawDY < 0: physical fingers moved downward; rawDX > 0: physical fingers moved left.
+            let expand = isVertical ? (scrollAccumY < 0) : (scrollAccumX > 0)
+            lastHandledScrollTimestamp = event.timestamp
+            scrollPhaseConsumed = true
+            applyScrollRevealStep(expand: expand)
+            return true
+        }
+
+        // Discrete mouse wheel (line-based deltas such as ±0.1 .. ±1.0).
+        let dy = event.scrollingDeltaY != 0 ? event.scrollingDeltaY : CGFloat(event.deltaY)
+        let dx = event.scrollingDeltaX != 0 ? event.scrollingDeltaX : CGFloat(event.deltaX)
+        let discreteDX = event.isDirectionInvertedFromDevice ? -dx : dx
+        let discreteDY = event.isDirectionInvertedFromDevice ? -dy : dy
+        guard abs(discreteDY) > 0.001 || abs(discreteDX) > 0.001 else { return false }
+        guard now.timeIntervalSince(lastDiscreteStepAt) >= 0.18 else { return overDot }
+
+        let isVertical = abs(discreteDY) >= abs(discreteDX)
+        if overFloatingBar {
+            guard isVertical, discreteDY > 0 else { return false }
+            lastDiscreteStepAt = now
+            lastHandledScrollTimestamp = event.timestamp
+            engine.setReveal(.none)
+            refresh()
+            return true
+        }
+
+        lastDiscreteStepAt = now
+        lastHandledScrollTimestamp = event.timestamp
+        let expand = isVertical ? (discreteDY < 0) : (discreteDX > 0)
+        applyScrollRevealStep(expand: expand)
+        return true
+    }
+
+    private func applyScrollRevealStep(expand: Bool) {
+        hoverRevealWork?.cancel()
+        hoverRevealWork = nil
+        closeQuickPanel(resetClicks: true)
+        if expand {
+            if engine.reveal == .none {
+                engine.setReveal(.hidden)
+            } else if engine.reveal == .hidden, engine.alwaysHiddenEnabled {
+                engine.setReveal(.all)
+            }
+        } else {
+            if engine.reveal == .all {
+                engine.setReveal(.hidden)
+            } else if engine.reveal != .none {
+                engine.setReveal(.none)
+            }
+        }
+        refresh()
     }
 
     // MARK: - Quick panel
