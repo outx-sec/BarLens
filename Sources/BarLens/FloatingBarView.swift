@@ -1299,46 +1299,69 @@ private struct FloatingLensLoupeView: View {
         }
     }
 
-    // MARK: Structured Fact Rows
+    // MARK: Structured Fact Rows (Geometry-Driven Universal Layout)
 
-    private func shouldStackFactRow(_ row: LensFactRow) -> Bool {
-        guard let label = row.label, !label.isEmpty, row.detail == nil else {
-            return false
-        }
-        let valUnits = row.value.estimatedVisualUnits
-        if valUnits > 26 {
-            return true
-        }
-        return valUnits > 20 && (label.estimatedVisualUnits + valUnits > 38)
+    private func isPathOrURL(_ text: String) -> Bool {
+        text.contains("://") || text.hasPrefix("/") || text.hasPrefix("~/")
     }
 
-    private func splitMiddleDotPair(_ text: String) -> (left: String, right: String)? {
-        for sep in [" · ", " • "] {
-            let parts = text.components(separatedBy: sep)
-                .map { $0.trimmingCharacters(in: .whitespaces) }
-            if parts.count == 2,
-               !parts[0].isEmpty,
-               !parts[1].isEmpty,
-               parts[0].estimatedVisualUnits + parts[1].estimatedVisualUnits <= 38 {
-                return (parts[0], parts[1])
+    private func splitInlineFacets(_ text: String) -> [String] {
+        for sep in [" · ", " • ", " | "] {
+            if text.contains(sep) {
+                let parts = text.components(separatedBy: sep)
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+                if parts.count >= 2 {
+                    return parts
+                }
             }
         }
-        return nil
+        return [text]
+    }
+
+    @ViewBuilder
+    private func clauseOrProseView(_ text: String,
+                                   font: Font,
+                                   color: Color,
+                                   dotColor: Color,
+                                   maxLines: Int = 2) -> some View {
+        let facets = splitInlineFacets(text)
+        if facets.count >= 2 {
+            FlowClauseLayout(horizontalGap: 5.5, verticalSpacing: 2.5, maxLines: maxLines) {
+                ForEach(Array(facets.enumerated()), id: \.offset) { idx, facet in
+                    if idx > 0 {
+                        Circle()
+                            .fill(dotColor)
+                    }
+                    Text(facet)
+                        .font(font)
+                        .monospacedDigit()
+                        .foregroundStyle(color)
+                        .lineLimit(1)
+                        .truncationMode(isPathOrURL(facet) ? .middle : .tail)
+                }
+            }
+        } else {
+            Text(text)
+                .font(font)
+                .monospacedDigit()
+                .foregroundStyle(color)
+                .multilineTextAlignment(.leading)
+                .lineLimit(maxLines)
+                .truncationMode(isPathOrURL(text) ? .middle : .tail)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     private func factRowsSection(_ rows: [LensFactRow]) -> some View {
         let hasLabelledRows = rows.contains { ($0.label?.isEmpty == false) }
-        let showDividers = rows.count > 1 && (
-            rows.contains { $0.detail != nil }
-                || (hasLabelledRows && rows.contains { $0.label == nil })
-                || rows.contains { shouldStackFactRow($0) }
-        )
+        let showDividers = rows.count > 1
 
-        return VStack(alignment: .leading, spacing: showDividers ? 6 : 5) {
+        return VStack(alignment: .leading, spacing: 5.5) {
             ForEach(Array(rows.enumerated()), id: \.element.id) { idx, row in
                 if idx > 0 && showDividers {
                     Rectangle()
-                        .fill(Color.primary.opacity(colorScheme == .dark ? 0.08 : 0.055))
+                        .fill(Color.primary.opacity(colorScheme == .dark ? 0.075 : 0.05))
                         .frame(height: 0.6)
                 }
                 factRowView(row, hasLabelledSiblings: hasLabelledRows)
@@ -1361,113 +1384,78 @@ private struct FloatingLensLoupeView: View {
 
     @ViewBuilder
     private func factRowView(_ row: LensFactRow, hasLabelledSiblings: Bool) -> some View {
+        let primaryColor = inkColor(for: row.tone)
+        let unlabelledColor: Color = row.tone == .neutral ? .primary.opacity(0.84) : primaryColor
+
         if let label = row.label, !label.isEmpty {
-            if shouldStackFactRow(row) {
-                VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 2.5) {
+                AdaptiveKeyValueLayout(horizontalSpacing: 10, verticalSpacing: 2) {
                     Text(label)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.primary.opacity(0.58))
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.primary.opacity(0.66))
                         .lineLimit(1)
                         .truncationMode(.tail)
-                    Text(row.value)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(inkColor(for: row.tone))
-                        .multilineTextAlignment(.leading)
-                        .lineLimit(2)
-                        .truncationMode(.tail)
-                        .fixedSize(horizontal: false, vertical: true)
+
+                    clauseOrProseView(
+                        row.value,
+                        font: .system(size: 11, weight: .semibold, design: .rounded),
+                        color: primaryColor,
+                        dotColor: primaryColor.opacity(0.45),
+                        maxLines: 2
+                    )
                 }
-            } else {
-                VStack(alignment: .leading, spacing: 2.5) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(label)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.primary.opacity(0.66))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                        Spacer(minLength: 8)
-                        Text(row.value)
-                            .font(.system(size: 11, weight: .semibold, design: .rounded))
-                            .monospacedDigit()
-                            .foregroundStyle(inkColor(for: row.tone))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .layoutPriority(1)
-                    }
-                    if let detail = row.detail, !detail.isEmpty {
-                        Text(detail)
-                            .font(.system(size: 10, weight: .medium, design: .rounded))
-                            .monospacedDigit()
-                            .foregroundStyle(.primary.opacity(0.56))
-                            .multilineTextAlignment(.leading)
-                            .lineLimit(2)
-                            .truncationMode(.tail)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+
+                if let detail = row.detail, !detail.isEmpty {
+                    clauseOrProseView(
+                        detail,
+                        font: .system(size: 10, weight: .medium, design: .rounded),
+                        color: .primary.opacity(0.58),
+                        dotColor: .primary.opacity(0.32),
+                        maxLines: 2
+                    )
                 }
             }
         } else if hasLabelledSiblings {
-            if row.detail == nil, let pair = splitMiddleDotPair(row.value) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(pair.left)
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(inkColor(for: row.tone))
-                        .lineLimit(1)
-                        .layoutPriority(1)
-                    Spacer(minLength: 8)
-                    Text(pair.right)
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(.primary.opacity(0.68))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 2.5) {
-                    Text(row.value)
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(row.tone == .neutral ? .primary.opacity(0.84) : inkColor(for: row.tone))
-                        .multilineTextAlignment(.leading)
-                        .lineLimit(2)
-                        .truncationMode(.tail)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if let detail = row.detail, !detail.isEmpty {
-                        Text(detail)
-                            .font(.system(size: 10, weight: .medium, design: .rounded))
-                            .monospacedDigit()
-                            .foregroundStyle(.primary.opacity(0.56))
-                            .multilineTextAlignment(.leading)
-                            .lineLimit(2)
-                            .truncationMode(.tail)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+            VStack(alignment: .leading, spacing: 2.5) {
+                clauseOrProseView(
+                    row.value,
+                    font: .system(size: 11, weight: .medium, design: .rounded),
+                    color: unlabelledColor,
+                    dotColor: unlabelledColor.opacity(0.45),
+                    maxLines: 2
+                )
+                if let detail = row.detail, !detail.isEmpty {
+                    clauseOrProseView(
+                        detail,
+                        font: .system(size: 10, weight: .medium, design: .rounded),
+                        color: .primary.opacity(0.58),
+                        dotColor: .primary.opacity(0.32),
+                        maxLines: 2
+                    )
                 }
             }
         } else {
             HStack(alignment: .top, spacing: 6) {
                 Circle()
-                    .fill(inkColor(for: row.tone))
+                    .fill(primaryColor)
                     .frame(width: 5, height: 5)
                     .padding(.top, 5)
                 VStack(alignment: .leading, spacing: 2.5) {
-                    Text(row.value)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(row.tone == .neutral ? .primary.opacity(0.84) : inkColor(for: row.tone))
-                        .multilineTextAlignment(.leading)
-                        .lineLimit(2)
-                        .truncationMode(.tail)
-                        .fixedSize(horizontal: false, vertical: true)
+                    clauseOrProseView(
+                        row.value,
+                        font: .system(size: 11, weight: .medium, design: .rounded),
+                        color: unlabelledColor,
+                        dotColor: unlabelledColor.opacity(0.45),
+                        maxLines: 2
+                    )
                     if let detail = row.detail, !detail.isEmpty {
-                        Text(detail)
-                            .font(.system(size: 10, weight: .medium, design: .rounded))
-                            .monospacedDigit()
-                            .foregroundStyle(.primary.opacity(0.56))
-                            .multilineTextAlignment(.leading)
-                            .lineLimit(2)
-                            .truncationMode(.tail)
-                            .fixedSize(horizontal: false, vertical: true)
+                        clauseOrProseView(
+                            detail,
+                            font: .system(size: 10, weight: .medium, design: .rounded),
+                            color: .primary.opacity(0.58),
+                            dotColor: .primary.opacity(0.32),
+                            maxLines: 2
+                        )
                     }
                 }
                 Spacer(minLength: 0)
@@ -1872,6 +1860,238 @@ private struct FloatingLensSubmenuFlyoutView: View {
                     }
                 }
             }
+        }
+    }
+}
+
+// MARK: - Universal Geometry-Driven Telemetry Layouts
+
+/// Adaptive key-value layout that measures real CoreText/SwiftUI glyph geometry (`sizeThatFits`)
+/// rather than relying on character-count heuristics:
+/// 1. When `label + spacing + value` fits within the row width, places both uncompressed on one line.
+/// 2. When `value` is compact (`<= 44%` of width) alongside a long `label` (e.g. Bluetooth/Display names),
+///    keeps one horizontal line and truncates `label` cleanly at the tail.
+/// 3. When `value` itself is wide and cannot fit beside `label`, stacks `label` above a full-width
+///    left-aligned `value`, completely eliminating ragged right-aligned wrapping across all languages.
+struct AdaptiveKeyValueLayout: Layout {
+    var horizontalSpacing: CGFloat = 10
+    var verticalSpacing: CGFloat = 2
+
+    private enum Mode {
+        case singleLineFull
+        case singleLineTruncateLabel
+        case stacked
+    }
+
+    private func resolveMode(availableWidth: CGFloat,
+                             labelIdeal: CGSize,
+                             valueIdeal: CGSize) -> Mode {
+        if labelIdeal.width + horizontalSpacing + valueIdeal.width <= availableWidth + 0.5 {
+            return .singleLineFull
+        }
+        if valueIdeal.width <= availableWidth * 0.44 {
+            return .singleLineTruncateLabel
+        }
+        return .stacked
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard subviews.count == 2 else { return .zero }
+        let labelIdeal = subviews[0].sizeThatFits(.unspecified)
+        let valueIdeal = subviews[1].sizeThatFits(.unspecified)
+
+        guard let rawW = proposal.width, rawW.isFinite, rawW > 0 else {
+            return CGSize(
+                width: labelIdeal.width + horizontalSpacing + valueIdeal.width,
+                height: max(labelIdeal.height, valueIdeal.height)
+            )
+        }
+        let availableWidth = max(80, rawW)
+        switch resolveMode(availableWidth: availableWidth, labelIdeal: labelIdeal, valueIdeal: valueIdeal) {
+        case .singleLineFull:
+            return CGSize(width: availableWidth, height: max(labelIdeal.height, valueIdeal.height))
+        case .singleLineTruncateLabel:
+            let valueW = min(valueIdeal.width, availableWidth * 0.44)
+            let labelMaxW = max(36, availableWidth - valueW - horizontalSpacing)
+            let labelFitted = subviews[0].sizeThatFits(ProposedViewSize(width: labelMaxW, height: nil))
+            let valueFitted = subviews[1].sizeThatFits(ProposedViewSize(width: valueW, height: nil))
+            return CGSize(width: availableWidth, height: max(labelFitted.height, valueFitted.height))
+        case .stacked:
+            let labelFitted = subviews[0].sizeThatFits(ProposedViewSize(width: availableWidth, height: nil))
+            let valueFitted = subviews[1].sizeThatFits(ProposedViewSize(width: availableWidth, height: nil))
+            return CGSize(
+                width: availableWidth,
+                height: labelFitted.height + verticalSpacing + valueFitted.height
+            )
+        }
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 2 else { return }
+        let availableWidth = max(80, bounds.width)
+        let labelIdeal = subviews[0].sizeThatFits(.unspecified)
+        let valueIdeal = subviews[1].sizeThatFits(.unspecified)
+
+        switch resolveMode(availableWidth: availableWidth, labelIdeal: labelIdeal, valueIdeal: valueIdeal) {
+        case .singleLineFull:
+            let rowH = max(labelIdeal.height, valueIdeal.height)
+            subviews[0].place(
+                at: CGPoint(x: bounds.minX, y: bounds.minY + (rowH - labelIdeal.height) * 0.5),
+                anchor: .topLeading,
+                proposal: .unspecified
+            )
+            subviews[1].place(
+                at: CGPoint(x: bounds.maxX, y: bounds.minY + (rowH - valueIdeal.height) * 0.5),
+                anchor: .topTrailing,
+                proposal: .unspecified
+            )
+
+        case .singleLineTruncateLabel:
+            let valueW = min(valueIdeal.width, availableWidth * 0.44)
+            let labelMaxW = max(36, availableWidth - valueW - horizontalSpacing)
+            let labelFitted = subviews[0].sizeThatFits(ProposedViewSize(width: labelMaxW, height: nil))
+            let valueFitted = subviews[1].sizeThatFits(ProposedViewSize(width: valueW, height: nil))
+            let rowH = max(labelFitted.height, valueFitted.height)
+            subviews[0].place(
+                at: CGPoint(x: bounds.minX, y: bounds.minY + (rowH - labelFitted.height) * 0.5),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: labelMaxW, height: labelFitted.height)
+            )
+            subviews[1].place(
+                at: CGPoint(x: bounds.maxX, y: bounds.minY + (rowH - valueFitted.height) * 0.5),
+                anchor: .topTrailing,
+                proposal: ProposedViewSize(width: valueW, height: valueFitted.height)
+            )
+
+        case .stacked:
+            let labelFitted = subviews[0].sizeThatFits(ProposedViewSize(width: availableWidth, height: nil))
+            let valueFitted = subviews[1].sizeThatFits(ProposedViewSize(width: availableWidth, height: nil))
+            subviews[0].place(
+                at: CGPoint(x: bounds.minX, y: bounds.minY),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: availableWidth, height: labelFitted.height)
+            )
+            subviews[1].place(
+                at: CGPoint(x: bounds.minX, y: bounds.minY + labelFitted.height + verticalSpacing),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: availableWidth, height: valueFitted.height)
+            )
+        }
+    }
+}
+
+/// Atomic inline-facet flow layout for multi-clause telemetry (`a · b · c`).
+/// Subviews alternate `[item0, dot1, item1, dot2, item2, ...]`.
+/// Keeps each facet unbroken; when a facet wraps onto the next line, the preceding separator dot
+/// is collapsed to `.zero` so lines never end or start with an orphan separator.
+struct FlowClauseLayout: Layout {
+    var horizontalGap: CGFloat = 5.5
+    var dotDiameter: CGFloat = 2.6
+    var verticalSpacing: CGFloat = 2.5
+    var maxLines: Int = 2
+
+    private struct Placement {
+        let subviewIndex: Int
+        let origin: CGPoint
+        let size: CGSize
+    }
+
+    private func compute(availableWidth: CGFloat, subviews: Subviews) -> (size: CGSize, placements: [Placement]) {
+        guard !subviews.isEmpty else { return (.zero, []) }
+        let itemCount = (subviews.count + 1) / 2
+        var placements: [Placement] = []
+        placements.reserveCapacity(subviews.count)
+
+        var cursorX: CGFloat = 0
+        var lineY: CGFloat = 0
+        var lineHeight: CGFloat = 0
+        var maxLineWidth: CGFloat = 0
+        var lineIndex = 0
+
+        for i in 0..<itemCount {
+            let itemSubIdx = i * 2
+            guard itemSubIdx < subviews.count else { break }
+            let sepSubIdx = (i > 0) ? (itemSubIdx - 1) : nil
+
+            if lineIndex >= maxLines {
+                if let sepSubIdx {
+                    placements.append(Placement(subviewIndex: sepSubIdx, origin: CGPoint(x: cursorX, y: lineY), size: .zero))
+                }
+                placements.append(Placement(subviewIndex: itemSubIdx, origin: CGPoint(x: cursorX, y: lineY), size: .zero))
+                continue
+            }
+
+            let rawSize = subviews[itemSubIdx].sizeThatFits(.unspecified)
+            let clampedW = availableWidth.isFinite ? min(rawSize.width, availableWidth) : rawSize.width
+            let itemSize = availableWidth.isFinite && rawSize.width > availableWidth
+                ? subviews[itemSubIdx].sizeThatFits(ProposedViewSize(width: clampedW, height: nil))
+                : CGSize(width: clampedW, height: rawSize.height)
+
+            if i == 0 {
+                placements.append(Placement(subviewIndex: itemSubIdx, origin: CGPoint(x: 0, y: lineY), size: itemSize))
+                cursorX = itemSize.width
+                lineHeight = itemSize.height
+                maxLineWidth = max(maxLineWidth, cursorX)
+            } else {
+                let needed = horizontalGap + dotDiameter + horizontalGap + itemSize.width
+                if cursorX + needed <= availableWidth + 0.5 {
+                    if let sepSubIdx {
+                        let dotY = lineY + (max(lineHeight, itemSize.height) - dotDiameter) * 0.5
+                        placements.append(Placement(
+                            subviewIndex: sepSubIdx,
+                            origin: CGPoint(x: cursorX + horizontalGap, y: dotY),
+                            size: CGSize(width: dotDiameter, height: dotDiameter)
+                        ))
+                    }
+                    let itemX = cursorX + horizontalGap + dotDiameter + horizontalGap
+                    placements.append(Placement(subviewIndex: itemSubIdx, origin: CGPoint(x: itemX, y: lineY), size: itemSize))
+                    cursorX = itemX + itemSize.width
+                    lineHeight = max(lineHeight, itemSize.height)
+                    maxLineWidth = max(maxLineWidth, cursorX)
+                } else {
+                    if let sepSubIdx {
+                        placements.append(Placement(subviewIndex: sepSubIdx, origin: CGPoint(x: cursorX, y: lineY), size: .zero))
+                    }
+                    lineIndex += 1
+                    if lineIndex >= maxLines {
+                        placements.append(Placement(subviewIndex: itemSubIdx, origin: CGPoint(x: 0, y: lineY), size: .zero))
+                        continue
+                    }
+                    lineY += lineHeight + verticalSpacing
+                    cursorX = itemSize.width
+                    lineHeight = itemSize.height
+                    placements.append(Placement(subviewIndex: itemSubIdx, origin: CGPoint(x: 0, y: lineY), size: itemSize))
+                    maxLineWidth = max(maxLineWidth, cursorX)
+                }
+            }
+        }
+
+        let totalHeight = lineY + lineHeight
+        let resolvedWidth = availableWidth.isFinite ? maxLineWidth : maxLineWidth
+        return (CGSize(width: resolvedWidth, height: totalHeight), placements)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let isConstrained = (proposal.width?.isFinite == true) && (proposal.width ?? 0) > 0
+        let availableW = isConstrained ? max(60, proposal.width!) : .greatestFiniteMagnitude
+        let computed = compute(availableWidth: availableW, subviews: subviews)
+        if isConstrained {
+            // When queried inside a fixed container width, take full horizontal width only when wrapped,
+            // or exact single-line width so right-alignment inside AdaptiveKeyValueLayout stays exact.
+            return computed.size
+        }
+        return computed.size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let availableW = max(60, bounds.width)
+        let computed = compute(availableWidth: availableW, subviews: subviews)
+        for p in computed.placements where p.subviewIndex < subviews.count {
+            subviews[p.subviewIndex].place(
+                at: CGPoint(x: bounds.minX + p.origin.x, y: bounds.minY + p.origin.y),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(p.size)
+            )
         }
     }
 }

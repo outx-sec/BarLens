@@ -535,7 +535,13 @@ enum SemanticLensExtractor {
             if rawVal.lowercased().hasSuffix(".yaml") || rawVal.lowercased().hasSuffix(".yml") {
                 rawVal = String(rawVal.dropLast(rawVal.lowercased().hasSuffix(".yaml") ? 5 : 4))
             }
-            if !rawKey.isEmpty, !rawVal.isEmpty, rawKey.count <= 18, rawKey.estimatedVisualUnits <= 22 {
+            let wordCount = rawKey.split(separator: " ").count
+            if !rawKey.isEmpty,
+               !rawVal.isEmpty,
+               rawKey.count <= 60,
+               wordCount <= 8,
+               !rawKey.contains(". "),
+               !rawKey.contains(" · ") {
                 let (primaryVal, detailVal) = splitTrailingDetail(rawVal)
                 return LensFactRow(
                     label: rawKey,
@@ -554,14 +560,11 @@ enum SemanticLensExtractor {
         )
     }
 
-    /// Separates a primary metric/state from a long trailing parenthetical or pipe/dash breakdown
-    /// (e.g. `"274M tokens (16M in · 1.7M out · 256M cached)"` -> `("274M tokens", "16M in · 1.7M out · 256M cached")`)
-    /// so primary values stay crisp on a single line while breakdowns render cleanly underneath.
+    /// Universal structural splitter: separates a primary value from a trailing compound breakdown
+    /// (e.g. multi-facet parentheticals `(a · b · c)`, `(a, b)`, `（...）`, or long secondary annotations)
+    /// while preserving short single-token qualifiers (`Ethernet (en0)`, `0 [Default]`, `AirPods Pro (2nd generation)`).
     private static func splitTrailingDetail(_ text: String) -> (primary: String, detail: String?) {
         let trimmed = collapseWhitespace(text)
-        guard trimmed.estimatedVisualUnits > 20 else {
-            return (trimmed, nil)
-        }
 
         let bracketPairs: [(open: Character, close: Character)] = [
             ("(", ")"),
@@ -591,7 +594,14 @@ enum SemanticLensExtractor {
                 let innerEnd = trimmed.index(before: trimmed.endIndex)
                 if innerStart < innerEnd {
                     let detail = String(trimmed[innerStart..<innerEnd]).trimmingCharacters(in: .whitespaces)
-                    if primary.estimatedVisualUnits >= 2 && detail.estimatedVisualUnits >= 6 {
+                    let isCompoundDetail = detail.contains(" · ")
+                        || detail.contains(" • ")
+                        || detail.contains(",")
+                        || detail.contains("，")
+                        || detail.contains(" | ")
+                        || detail.contains("; ")
+                    let isLongAnnotation = trimmed.estimatedVisualUnits > 30 && detail.estimatedVisualUnits >= 10
+                    if primary.count >= 2 && detail.count >= 4 && (isCompoundDetail || isLongAnnotation) {
                         return (primary, detail)
                     }
                 }
@@ -599,12 +609,12 @@ enum SemanticLensExtractor {
         }
 
         if trimmed.estimatedVisualUnits > 24 {
-            for sep in [" — ", " | "] {
+            for sep in [" — ", " – "] {
                 if let range = trimmed.range(of: sep) {
                     let primary = String(trimmed[..<range.lowerBound]).trimmingCharacters(in: .whitespaces)
                     let detail = String(trimmed[range.upperBound...]).trimmingCharacters(in: .whitespaces)
                     if primary.estimatedVisualUnits >= 2,
-                       primary.estimatedVisualUnits <= 20,
+                       primary.estimatedVisualUnits <= 22,
                        detail.estimatedVisualUnits >= 6 {
                         return (primary, detail)
                     }
@@ -618,13 +628,30 @@ enum SemanticLensExtractor {
     private static func findKeyValueSeparator(in text: String) -> String.Index? {
         for idx in text.indices {
             let ch = text[idx]
-            if ch == "：" { return idx }
-            if ch == ":" {
-                if idx > text.startIndex {
-                    let prev = text[text.index(before: idx)]
-                    if prev.isNumber { continue }
+            if ch == "：" {
+                if idx > text.startIndex && text.index(after: idx) < text.endIndex {
+                    return idx
                 }
-                return idx
+                continue
+            }
+            if ch == ":" {
+                guard idx > text.startIndex else { continue }
+                let nextIdx = text.index(after: idx)
+                guard nextIdx < text.endIndex else { continue }
+                let prev = text[text.index(before: idx)]
+                let next = text[nextIdx]
+                // Skip time literals ("14:32"), IPv6 / scope colons ("::"), and URL schemes ("://").
+                if prev == ":" || next == ":" || (prev.isNumber && next.isNumber) {
+                    continue
+                }
+                if text[nextIdx...].hasPrefix("//") {
+                    continue
+                }
+                let keyPrefix = text[..<idx]
+                let hasCJKKey = keyPrefix.unicodeScalars.contains { $0.value >= 0x2E80 }
+                if next.isWhitespace || hasCJKKey {
+                    return idx
+                }
             }
         }
         return nil
@@ -632,20 +659,28 @@ enum SemanticLensExtractor {
 
     private static func inferTone(forValue text: String) -> LensFactRow.ValueTone {
         let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        if lower == "on" || lower == "enabled" || lower == "connected"
-            || lower.contains("running") || lower.contains("运行中")
-            || lower.contains("已连接") || lower.contains("已开启") || lower.contains("充电") {
-            return .active
+        let warningMarkers = [
+            "error", "failed", "disconnected", "offline", "warning", "expired",
+            "timeout", "unhealthy", "muted", "异常", "错误", "失败", "断开", "离线", "告警", "过期", "超时", "静音"
+        ]
+        if warningMarkers.contains(where: { lower.contains($0) }) {
+            return .warning
         }
-        if lower == "off" || lower == "disabled" || lower.contains("未连接") || lower.contains("已关闭") {
+        let neutralMarkers = [
+            "disabled", "standby", "paused", "stopped", "no active",
+            "未连接", "暂无", "已关闭", "已暂停", "已停止", "待机", "空闲"
+        ]
+        if lower == "off" || lower == "idle" || lower == "none"
+            || neutralMarkers.contains(where: { lower.contains($0) }) {
             return .neutral
         }
-        if lower.contains("token") || lower.contains("$") || lower.contains("¥")
-            || lower.contains("◈") || lower.contains("hz") || lower.contains("mbps") {
-            return .accent
-        }
-        if lower.contains("error") || lower.contains("异常") || lower.contains("静音") || lower.contains("muted") {
-            return .warning
+        let activeMarkers = [
+            "running", "connected", "online", "healthy", "synced", "up to date", "charging",
+            "运行中", "已连接", "已开启", "在线", "已同步", "充电", "正常"
+        ]
+        if lower == "on" || lower == "enabled" || lower == "active"
+            || activeMarkers.contains(where: { lower.contains($0) }) {
+            return .active
         }
         return .accent
     }
@@ -720,9 +755,23 @@ enum SemanticLensExtractor {
     // MARK: - Line Splitting & Filtering
 
     private static func splitLines(_ text: String) -> [String] {
-        text.components(separatedBy: .newlines)
+        let rawLines = text.components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+        var expanded: [String] = []
+        for line in rawLines {
+            if line.contains("; ") {
+                let parts = line.components(separatedBy: "; ")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+                if parts.count >= 2 && parts.filter({ findKeyValueSeparator(in: $0) != nil }).count >= 2 {
+                    expanded.append(contentsOf: parts)
+                    continue
+                }
+            }
+            expanded.append(line)
+        }
+        return expanded
     }
 
     private static func isNoiseOrHeader(_ line: String, appName: String, bundleID: String) -> Bool {

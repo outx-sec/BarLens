@@ -1,3 +1,5 @@
+import AppKit
+import SwiftUI
 import XCTest
 @testable import BarLens
 
@@ -314,5 +316,127 @@ final class SemanticLensTests: XCTestCase {
         XCTAssertTrue(vitals.isHighMemory)
         XCTAssertEqual(vitals.formattedMemory, "1.54 GB")
         XCTAssertEqual(vitals.formattedCPU, "12%")
+    }
+
+    func testUniversalColonDisambiguationNounQualifiersAndSemicolonExpansion() {
+        let universal = SemanticLensExtractor.extract(
+            appName: "AnyUtility",
+            bundleID: "com.example.anyutility",
+            items: [
+                RawAXItemTelemetry(
+                    help: """
+                    https://gateway.example.com:8443/health
+                    Output: AirPods Pro (2nd generation)
+                    Keychron Q1 Pro Wireless Mechanical Keyboard: 86%
+                    Endpoint: https://api.example.com:8443/v1
+                    """
+                ),
+                RawAXItemTelemetry(
+                    description: "CPU: 14%; Memory: 62%"
+                ),
+            ]
+        )
+
+        // Bare URL must NOT split on 'https:' into label="https", value="//..."
+        XCTAssertEqual(universal.rows[0], LensFactRow(
+            label: nil,
+            value: "https://gateway.example.com:8443/health",
+            detail: nil,
+            tone: .accent
+        ))
+        // Noun qualifier "(2nd generation)" stays inline with the device name rather than splitting
+        XCTAssertEqual(universal.rows[1], LensFactRow(
+            label: "Output",
+            value: "AirPods Pro (2nd generation)",
+            detail: nil,
+            tone: .accent
+        ))
+        // Long hardware peripheral name before ':' is preserved as key
+        XCTAssertEqual(universal.rows[2], LensFactRow(
+            label: "Keychron Q1 Pro Wireless Mechanical Keyboard",
+            value: "86%",
+            detail: nil,
+            tone: .accent
+        ))
+        // Key followed by a full URL keeps the entire URL intact in value
+        XCTAssertEqual(universal.rows[3], LensFactRow(
+            label: "Endpoint",
+            value: "https://api.example.com:8443/v1",
+            detail: nil,
+            tone: .accent
+        ))
+        // Semicolon-delimited compact pairs expand cleanly
+        XCTAssertEqual(universal.rows[4], LensFactRow(
+            label: "CPU",
+            value: "14%",
+            detail: nil,
+            tone: .accent
+        ))
+    }
+
+    @MainActor
+    func testGeometryDrivenLayoutsAdaptAcrossShortLongAndFacetedRows() {
+        func measureHeight<V: View>(_ view: V, width: CGFloat = 258) -> CGFloat {
+            let hosted = NSHostingView(rootView: view.frame(width: width))
+            hosted.layoutSubtreeIfNeeded()
+            return hosted.fittingSize.height
+        }
+
+        let shortRowHeight = measureHeight(
+            AdaptiveKeyValueLayout {
+                Text("Today").font(.system(size: 11, weight: .medium)).lineLimit(1)
+                Text("274M tokens").font(.system(size: 11, weight: .semibold)).lineLimit(2)
+            }
+        )
+
+        let longLabelCompactValueHeight = measureHeight(
+            AdaptiveKeyValueLayout {
+                Text("Keychron Q1 Pro Wireless Mechanical Keyboard")
+                    .font(.system(size: 11, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text("86%")
+                    .font(.system(size: 11, weight: .semibold))
+                    .lineLimit(2)
+            }
+        )
+
+        let longValueStackedHeight = measureHeight(
+            AdaptiveKeyValueLayout {
+                Text("Output Device").font(.system(size: 11, weight: .medium)).lineLimit(1)
+                Text("MacBook Pro Built-in Speakers + External Apple Studio Display Audio")
+                    .font(.system(size: 11, weight: .semibold))
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(2)
+            }
+        )
+
+        // Long label + short badge stays on 1 horizontal line; long value stacks vertically (> 1.8x height)
+        XCTAssertEqual(shortRowHeight, longLabelCompactValueHeight, accuracy: 2.0)
+        XCTAssertGreaterThan(longValueStackedHeight, shortRowHeight * 1.8)
+
+        let singleLineFacetsHeight = measureHeight(
+            FlowClauseLayout {
+                Text("16M in").font(.system(size: 10)).lineLimit(1)
+                Circle()
+                Text("1.7M out").font(.system(size: 10)).lineLimit(1)
+                Circle()
+                Text("256M cached").font(.system(size: 10)).lineLimit(1)
+            }
+        )
+
+        let wrappedFacetsHeight = measureHeight(
+            FlowClauseLayout {
+                Text("16M input tokens").font(.system(size: 10)).lineLimit(1)
+                Circle()
+                Text("1.7M output tokens").font(.system(size: 10)).lineLimit(1)
+                Circle()
+                Text("256M cached tokens").font(.system(size: 10)).lineLimit(1)
+                Circle()
+                Text("42M reasoning tokens").font(.system(size: 10)).lineLimit(1)
+            }
+        )
+
+        XCTAssertGreaterThan(wrappedFacetsHeight, singleLineFacetsHeight * 1.7)
     }
 }
