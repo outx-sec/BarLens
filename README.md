@@ -41,18 +41,20 @@ Traditional macOS menu bar managers work by inserting an ultra-wide invisible `N
 
 ## 🔮 Highlights
 
-### 1. Second-Row Liquid Glass Optical Capsule
+### 1. Second-Row Liquid Glass Optical Capsule & Semantic Lens HUD
 Click the **Eclipse Halo** trigger in your menu bar to unfurl hidden items in a floating **Liquid Glass** capsule nestled `4pt` beneath the top menu bar:
 - **4-Layer Optical Rim (`LiquidGlassRim`)**: Outer depth contour, inner cushion vignette, 135° Fresnel specular highlight, and top caustic sheen.
+- **Zero-Capture Semantic Lens (`透镜状态透视`)**: Without requesting Screen Recording permission, BarLens distills live Accessibility attributes (`AXTitle`, `AXDescription`, `AXValue`, and multiline `AXHelp` tooltips) plus native `IOKit` / `CoreAudio` / `Carbon` telemetry into unread badges, live status dots, and a zero-shift optical readout bar right beneath the floating capsule.
 - **Click-to-Open & Click-to-Collapse**: Click any third-party app or system icon inside the floating bar to invoke its native macOS menu in-place; click again (or click outside) to collapse smoothly.
 - **Drag-and-Drop Icon Reordering**: Drag icons directly inside the floating bar (or use right-click `Move to Front` / `Move to End`) to arrange your hidden items in any custom order.
 - **3 Built-In Optical Presets**: Switch effortlessly between **Crystal Lens** (default), **Obsidian Glass**, and **Prism Sheen**, or fine-tune **Glass Density** (`8%–75%`) and **Refractive Rim Intensity** (`40%–150%`) with a live interactive preview stage.
 
-### 2. Three-Tier Section Model
+### 2. Three-Tier Section Model & Spatial Budget Guard
 Organize every application and built-in system item into three clear lists:
 ```text
 Visible (始终显示)   ·   Hidden (可隐藏)   ·   Always Hidden (永久隐藏)
 ```
+- **Spatial Budget & Notch Overflow Guard (`顶栏容量保护`)**: Measures MacBook Notch `NSScreen.auxiliaryTopRightArea`, frontmost app `AXMenuBar` width, or optional `5 / 8 / 12` visible-slot budgets (stabilized with hysteresis) to gracefully tuck overflow **Visible** apps into a leading **Tucked** cluster inside the Floating Bar instead of letting macOS swallow them—complete with per-app **Pin to Menu Bar** exemptions.
 - **Per-Application Grouping**: Hiding operates by bundle identifier, so multi-icon apps move together cleanly without stranding orphan status items.
 - **One-Click Peek Pill**: When **Always Hidden** items exist, a compact purple glass badge (`+N`) appears inside the floating bar so you can peek at rarely used items on demand.
 - **Portable JSON Profile Backup**: Export and import your entire configuration (sections, custom icon order, hotkeys, and Liquid Glass optical tuning) as a single `BarLens-Profile.json` file.
@@ -98,7 +100,7 @@ BarLens integrates with both `MenuBarClientCore` assessment bitmasks and `com.ap
 - **Accessibility Permission** *(Used to enumerate menu bar items and proxy clicks).*
 
 ### Install from Release DMG / ZIP
-1. Download `BarLens-1.0.1.dmg` from **Releases** and drag **`BarLens.app`** into **`/Applications`**.
+1. Download `BarLens-1.0.2.dmg` from **Releases** and drag **`BarLens.app`** into **`/Applications`**.
 2. Clear the quarantine flag on first launch (since open-source builds are self-signed):
    ```bash
    xattr -d com.apple.quarantine /Applications/BarLens.app
@@ -124,7 +126,7 @@ While a visibility restriction is active, `MenuBarAgent` filters allowed items s
 `./build.sh` automatically uses a local `BarLens Dev` certificate if present, or **falls back to ad-hoc signing (`--sign -`)** with a warning so `git clone && ./build.sh` works immediately:
 
 ```bash
-# Run the test suite (50 unit tests)
+# Run the test suite (64 unit tests)
 swift test
 
 # Build and install to /Applications/BarLens.app
