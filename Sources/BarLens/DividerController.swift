@@ -19,6 +19,12 @@ final class DividerController: NSObject, NSPopoverDelegate {
 
     private let engine = DividerEngine()
     private lazy var settings = SettingsWindowController(engine: engine)
+    private lazy var onboarding = OnboardingWindowController(
+        engine: engine,
+        onOpenSettings: { [weak self] pane in
+            self?.settings.present(pane: pane)
+        }
+    )
 
     private var dotItem: NSStatusItem?
     private var proxyItems: [String: NSStatusItem] = [:]
@@ -51,6 +57,9 @@ final class DividerController: NSObject, NSPopoverDelegate {
     func start() {
         engine.start()             // heartbeat + permission polling
         engine.onChange = { [weak self] in self?.refresh() }
+        engine.onReplayOnboarding = { [weak self] in
+            self?.onboarding.present()
+        }
 
         closeQuickPanel()
         createDot()
@@ -69,21 +78,20 @@ final class DividerController: NSObject, NSPopoverDelegate {
         showWelcomeIfNeeded()
     }
 
-    /// Open the settings window the first time the app runs.
-    ///
-    /// With nothing assigned there is nothing to toggle, so the dot looks inert
-    /// and the app gives no clue what it is for. The window is where the three
-    /// sections are explained.
+    /// Present the interactive 4-step Liquid Glass onboarding tour the first
+    /// time BarLens runs on a new installation.
     private func showWelcomeIfNeeded() {
-        guard !Defaults.hasShownWelcome else { return }
+        guard !Defaults.hasCompletedOnboarding && !Defaults.hasShownWelcome else { return }
         Defaults.hasShownWelcome = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
-            self?.settings.present()
+        Defaults.hasCompletedOnboarding = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            self?.onboarding.present()
         }
     }
 
     func stop() {
         NSWorkspace.shared.notificationCenter.removeObserver(self)
+        onboarding.close()
         quickPopover?.animates = false
         closeQuickPanel()
         floatingBar.hide()
@@ -360,6 +368,10 @@ final class DividerController: NSObject, NSPopoverDelegate {
                 self.engine.setReveal(reveal)
             },
             onManage: { [weak self] in self?.openSettings() },
+            onOpenGuide: { [weak self] in
+                self?.closeQuickPanel()
+                self?.settings.present(pane: .guide)
+            },
             onReconnect: { [weak self] in self?.reconnectService() },
             onAssign: { [weak self] section in self?.bulkAssign(section) },
             onQuit: { [weak self] in self?.quit() },
@@ -469,6 +481,7 @@ final class DividerController: NSObject, NSPopoverDelegate {
         }
         syncProxyItems()
         settings.syncAppearance()
+        onboarding.syncAppearance()
         quickPopover?.appearance = engine.appearanceMode.nsAppearance
         floatingBar.update(relativeTo: dotItem?.button)
     }

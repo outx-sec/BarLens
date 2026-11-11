@@ -212,31 +212,50 @@ struct FloatingBarOrder: Equatable, Codable {
         }.map(\.element)
     }
 
+    /// Moves `itemID` to `toIndex` within `currentIDs` while preserving the
+    /// exact positions of any items outside `currentIDs` (e.g. another section
+    /// or currently quit applications).
+    mutating func moveToIndex(itemID: String, toIndex: Int, within currentIDs: [String]) {
+        guard !currentIDs.isEmpty else { return }
+        var slice = sorted(currentIDs, id: { $0 })
+        guard let fromIdx = slice.firstIndex(of: itemID) else { return }
+        let clampedTo = min(max(0, toIndex), slice.count - 1)
+        guard fromIdx != clampedTo else { return }
+        let moved = slice.remove(at: fromIdx)
+        slice.insert(moved, at: clampedTo)
+
+        var working = mergedOrder(with: currentIDs)
+        let currentSet = Set(currentIDs)
+        let sliceSlots = working.indices.filter { currentSet.contains(working[$0]) }
+        for (slot, id) in zip(sliceSlots, slice) {
+            working[slot] = id
+        }
+        orderedIDs = working
+    }
+
     /// Reorders `movingID` relative to `targetID` within the currently visible `currentIDs` slice.
     mutating func move(itemID movingID: String, to targetID: String, within currentIDs: [String]) {
         guard movingID != targetID else { return }
-        var working = mergedOrder(with: currentIDs)
-        guard let fromIndex = working.firstIndex(of: movingID),
-              let toIndex = working.firstIndex(of: targetID) else { return }
-        let item = working.remove(at: fromIndex)
-        working.insert(item, at: toIndex)
-        orderedIDs = working
+        let slice = sorted(currentIDs, id: { $0 })
+        guard let targetIdx = slice.firstIndex(of: targetID) else { return }
+        moveToIndex(itemID: movingID, toIndex: targetIdx, within: slice)
     }
 
     /// Moves `itemID` one slot earlier (`delta = -1`) or later (`delta = +1`) within `currentIDs`.
     mutating func moveByStep(itemID: String, delta: Int, within currentIDs: [String]) {
-        guard delta != 0, let idx = currentIDs.firstIndex(of: itemID) else { return }
+        guard delta != 0 else { return }
+        let slice = sorted(currentIDs, id: { $0 })
+        guard let idx = slice.firstIndex(of: itemID) else { return }
         let targetIdx = idx + delta
-        guard currentIDs.indices.contains(targetIdx) else { return }
-        move(itemID: itemID, to: currentIDs[targetIdx], within: currentIDs)
+        guard slice.indices.contains(targetIdx) else { return }
+        moveToIndex(itemID: itemID, toIndex: targetIdx, within: slice)
     }
 
     /// Moves `itemID` to the start or end of the `currentIDs` group.
     mutating func moveToEdge(itemID: String, toFront: Bool, within currentIDs: [String]) {
-        guard !currentIDs.isEmpty else { return }
-        let anchors = currentIDs.filter { $0 != itemID }
-        guard let target = toFront ? anchors.first : anchors.last else { return }
-        move(itemID: itemID, to: target, within: currentIDs)
+        let slice = sorted(currentIDs, id: { $0 })
+        guard !slice.isEmpty else { return }
+        moveToIndex(itemID: itemID, toIndex: toFront ? 0 : slice.count - 1, within: slice)
     }
 
     mutating func reset() {
@@ -272,6 +291,7 @@ enum Defaults {
         static let glassOpacity = "glassOpacity"
         static let rimIntensity = "rimIntensity"
         static let hasShownWelcome = "hasShownWelcome"
+        static let hasCompletedOnboarding = "hasCompletedOnboarding"
         static let hotkeys = "hotkeys"
         static let settingsPane = "settingsPane"
         static let unclassifiedSection = "unclassifiedSection"
@@ -386,6 +406,11 @@ enum Defaults {
     static var hasShownWelcome: Bool {
         get { UserDefaults.standard.bool(forKey: Key.hasShownWelcome) }
         set { UserDefaults.standard.set(newValue, forKey: Key.hasShownWelcome) }
+    }
+
+    static var hasCompletedOnboarding: Bool {
+        get { UserDefaults.standard.bool(forKey: Key.hasCompletedOnboarding) }
+        set { UserDefaults.standard.set(newValue, forKey: Key.hasCompletedOnboarding) }
     }
 
     static var settingsPane: String {

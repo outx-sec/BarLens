@@ -291,6 +291,15 @@ final class FloatingBarOrderAndProfileTests: XCTestCase {
             "Clamping at leading edge must keep order intact"
         )
 
+        // Direct index move used by 1:1 cursor-locked dragging must preserve unseen / other-section slots.
+        var mixedOrder = FloatingBarOrder(orderedIDs: ["always:1", "app:a", "app:b", "always:2", "sys:wifi"])
+        mixedOrder.moveToIndex(itemID: "app:a", toIndex: 2, within: ["app:a", "app:b", "sys:wifi"])
+        XCTAssertEqual(
+            mixedOrder.orderedIDs,
+            ["always:1", "app:b", "sys:wifi", "always:2", "app:a"],
+            "moveToIndex must reorder within the active slice without disturbing other-section items"
+        )
+
         order.reset()
         XCTAssertTrue(order.isEmpty)
         XCTAssertEqual(order.sorted(current, id: { $0 }), current)

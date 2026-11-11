@@ -197,6 +197,42 @@ final class FloatingBarController {
     }
 }
 
+private struct ActiveFloatingBarDrag: Equatable {
+    let itemID: String
+    let section: SectionModel.Section
+    let siblingIDs: [String]
+    let startIndex: Int
+    var targetIndex: Int
+
+    static let slotStride: CGFloat = 45.0 // 38pt icon button + 7pt HStack spacing
+
+    func effectiveTranslationX(raw rawDX: CGFloat) -> CGFloat {
+        let minOffset = -CGFloat(startIndex) * Self.slotStride
+        let maxOffset = CGFloat(max(0, siblingIDs.count - 1 - startIndex)) * Self.slotStride
+        if rawDX < minOffset {
+            return minOffset + (rawDX - minOffset) * 0.26
+        } else if rawDX > maxOffset {
+            return maxOffset + (rawDX - maxOffset) * 0.26
+        }
+        return rawDX
+    }
+
+    func computedTargetIndex(for rawDX: CGFloat) -> Int {
+        guard !siblingIDs.isEmpty else { return 0 }
+        let slotDelta = Int((rawDX / Self.slotStride).rounded())
+        return min(max(0, startIndex + slotDelta), siblingIDs.count - 1)
+    }
+
+    func neighborShiftX(at index: Int) -> CGFloat {
+        if startIndex < targetIndex, ((startIndex + 1)...targetIndex).contains(index) {
+            return -Self.slotStride
+        } else if targetIndex < startIndex, (targetIndex...(startIndex - 1)).contains(index) {
+            return Self.slotStride
+        }
+        return 0
+    }
+}
+
 struct FloatingBarView: View {
     @ObservedObject var engine: DividerEngine
     @ObservedObject var catalog: Catalog
@@ -204,7 +240,10 @@ struct FloatingBarView: View {
     let onOpenSettings: () -> Void
     let onExpandInline: () -> Void
 
-    @State private var draggedItemID: String?
+    @State private var activeDrag: ActiveFloatingBarDrag?
+    @State private var activeDragTranslationX: CGFloat = 0
+    @State private var settleItemID: String?
+    @State private var settleOffsetX: CGFloat = 0
 
     private var hiddenItems: [FloatingBarItem] {
         items(in: .hidden)
@@ -287,12 +326,17 @@ struct FloatingBarView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 7) {
                         let hiddenIDs = hiddenItems.map(\.id)
+                        let hiddenIndexByID = Dictionary(uniqueKeysWithValues: hiddenIDs.enumerated().map { ($1, $0) })
                         ForEach(hiddenItems) { item in
                             FloatingBarItemButton(
                                 item: item,
+                                itemIndex: hiddenIndexByID[item.id] ?? 0,
                                 siblingIDs: hiddenIDs,
                                 engine: engine,
-                                draggedItemID: $draggedItemID
+                                activeDrag: $activeDrag,
+                                activeDragTranslationX: $activeDragTranslationX,
+                                settleItemID: $settleItemID,
+                                settleOffsetX: $settleOffsetX
                             )
                         }
 
@@ -301,12 +345,17 @@ struct FloatingBarView: View {
                                 FloatingBarSeparator()
                             }
                             let alwaysIDs = alwaysHiddenItems.map(\.id)
+                            let alwaysIndexByID = Dictionary(uniqueKeysWithValues: alwaysIDs.enumerated().map { ($1, $0) })
                             ForEach(alwaysHiddenItems) { item in
                                 FloatingBarItemButton(
                                     item: item,
+                                    itemIndex: alwaysIndexByID[item.id] ?? 0,
                                     siblingIDs: alwaysIDs,
                                     engine: engine,
-                                    draggedItemID: $draggedItemID
+                                    activeDrag: $activeDrag,
+                                    activeDragTranslationX: $activeDragTranslationX,
+                                    settleItemID: $settleItemID,
+                                    settleOffsetX: $settleOffsetX
                                 )
                             }
                         }
@@ -427,7 +476,6 @@ private struct FloatingBarGearButton: View {
                 onClick: onOpenSettings,
                 onDragStarted: nil,
                 onDragOffsetChanged: nil,
-                onStepSwap: nil,
                 onDragEnded: nil,
                 onMenuOpenChanged: { isOpen in
                     if isOpen {
@@ -497,6 +545,13 @@ private struct FloatingBarGearButton: View {
 
                     menu.addItem(.separator())
                     menu.addItem(MenuActionItem(
+                        title: tr("使用指南…", "User Guide…"),
+                        symbol: "book.closed"
+                    ) {
+                        engine.requestedSettingsPane = .guide
+                        onOpenSettings()
+                    })
+                    menu.addItem(MenuActionItem(
                         title: tr("打开设置…", "Open Settings…"),
                         symbol: "gearshape",
                         actionBlock: onOpenSettings
@@ -510,16 +565,32 @@ private struct FloatingBarGearButton: View {
 
 private struct FloatingBarItemButton: View {
     let item: FloatingBarItem
+    let itemIndex: Int
     let siblingIDs: [String]
     @ObservedObject var engine: DividerEngine
-    @Binding var draggedItemID: String?
+    @Binding var activeDrag: ActiveFloatingBarDrag?
+    @Binding var activeDragTranslationX: CGFloat
+    @Binding var settleItemID: String?
+    @Binding var settleOffsetX: CGFloat
 
     @State private var hovered = false
     @State private var pressed = false
-    @State private var dragOffsetX: CGFloat = 0
 
     private var isDraggingThis: Bool {
-        draggedItemID == item.id
+        activeDrag?.itemID == item.id
+    }
+
+    private var computedOffsetX: CGFloat {
+        if let drag = activeDrag, drag.section == item.section {
+            if drag.itemID == item.id {
+                return drag.effectiveTranslationX(raw: activeDragTranslationX)
+            }
+            return drag.neighborShiftX(at: itemIndex)
+        }
+        if settleItemID == item.id {
+            return settleOffsetX
+        }
+        return 0
     }
 
     private var isActive: Bool {
@@ -589,9 +660,10 @@ private struct FloatingBarItemButton: View {
             }
             .frame(width: 38, height: 38)
         }
-        .scaleEffect(isDraggingThis ? 1.10 : 1.0)
-        .offset(x: dragOffsetX)
-        .zIndex(isDraggingThis ? 20 : 0)
+        .scaleEffect(isDraggingThis ? 1.08 : 1.0)
+        .animation(.easeOut(duration: 0.14), value: isDraggingThis)
+        .offset(x: computedOffsetX)
+        .zIndex(isDraggingThis || settleItemID == item.id ? 20 : 0)
         .overlay {
             FloatingBarItemMouseBridge(
                 toolTip: tr("\(item.title) · 点按打开菜单 · 按住左右拖拽排序 · 右键快捷操作", "\(item.title) · Click: Menu · Drag: Reorder · Right-Click: Actions"),
@@ -599,25 +671,58 @@ private struct FloatingBarItemButton: View {
                 onPressedChanged: { pressed = $0 },
                 onClick: triggerItem,
                 onDragStarted: {
-                    draggedItemID = item.id
+                    settleItemID = nil
+                    settleOffsetX = 0
+                    activeDragTranslationX = 0
+                    activeDrag = ActiveFloatingBarDrag(
+                        itemID: item.id,
+                        section: item.section,
+                        siblingIDs: siblingIDs,
+                        startIndex: itemIndex,
+                        targetIndex: itemIndex
+                    )
                 },
-                onDragOffsetChanged: { dx in
-                    dragOffsetX = dx
-                },
-                onStepSwap: { stepDelta in
-                    let latestSiblings = engine.floatingBarOrder.sorted(siblingIDs, id: { $0 })
-                    guard let currentIdx = latestSiblings.firstIndex(of: item.id) else { return false }
-                    let nextIdx = currentIdx + stepDelta
-                    guard latestSiblings.indices.contains(nextIdx) else { return false }
-                    withAnimation(.spring(response: 0.22, dampingFraction: 0.84)) {
-                        engine.moveFloatingBarItemByStep(item.id, delta: stepDelta, within: latestSiblings)
+                onDragOffsetChanged: { rawDX in
+                    // Update raw translation without animation so the dragged icon stays 1:1 glued to the pointer.
+                    activeDragTranslationX = rawDX
+                    if let current = activeDrag, current.itemID == item.id {
+                        let newTarget = current.computedTargetIndex(for: rawDX)
+                        if newTarget != current.targetIndex {
+                            withAnimation(.interactiveSpring(response: 0.20, dampingFraction: 0.92)) {
+                                activeDrag?.targetIndex = newTarget
+                            }
+                        }
                     }
-                    return true
                 },
                 onDragEnded: {
-                    withAnimation(.spring(response: 0.22, dampingFraction: 0.84)) {
-                        dragOffsetX = 0
-                        draggedItemID = nil
+                    guard let finished = activeDrag, finished.itemID == item.id else { return }
+                    let finalTarget = finished.targetIndex
+                    let currentVisualX = finished.effectiveTranslationX(raw: activeDragTranslationX)
+                    let slotShiftX = CGFloat(finalTarget - finished.startIndex) * ActiveFloatingBarDrag.slotStride
+                    let residualX = currentVisualX - slotShiftX
+
+                    var snapTx = Transaction()
+                    snapTx.disablesAnimations = true
+                    withTransaction(snapTx) {
+                        if finalTarget != finished.startIndex {
+                            engine.moveFloatingBarItemToIndex(finished.itemID, toIndex: finalTarget, within: finished.siblingIDs)
+                        }
+                        activeDrag = nil
+                        activeDragTranslationX = 0
+                        settleItemID = finished.itemID
+                        settleOffsetX = residualX
+                    }
+
+                    let settledID = finished.itemID
+                    DispatchQueue.main.async {
+                        withAnimation(.interactiveSpring(response: 0.18, dampingFraction: 0.94)) {
+                            settleOffsetX = 0
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+                            if settleItemID == settledID && settleOffsetX == 0 {
+                                settleItemID = nil
+                            }
+                        }
                     }
                 },
                 onMenuOpenChanged: { isOpen in
@@ -840,7 +945,6 @@ private struct FloatingBarItemMouseBridge: NSViewRepresentable {
     let onClick: () -> Void
     let onDragStarted: (() -> Void)?
     let onDragOffsetChanged: ((CGFloat) -> Void)?
-    let onStepSwap: ((Int) -> Bool)?
     let onDragEnded: (() -> Void)?
     let onMenuOpenChanged: (Bool) -> Void
     let buildContextMenu: () -> NSMenu
@@ -862,7 +966,6 @@ private struct FloatingBarItemMouseBridge: NSViewRepresentable {
         view.onClick = onClick
         view.onDragStarted = onDragStarted
         view.onDragOffsetChanged = onDragOffsetChanged
-        view.onStepSwap = onStepSwap
         view.onDragEnded = onDragEnded
         view.onMenuOpenChanged = onMenuOpenChanged
         view.buildContextMenu = buildContextMenu
@@ -878,7 +981,6 @@ private final class FloatingBarItemMouseView: NSView {
     var onClick: (() -> Void)?
     var onDragStarted: (() -> Void)?
     var onDragOffsetChanged: ((CGFloat) -> Void)?
-    var onStepSwap: ((Int) -> Bool)?
     var onDragEnded: (() -> Void)?
     var onMenuOpenChanged: ((Bool) -> Void)?
     var buildContextMenu: (() -> NSMenu)?
@@ -935,29 +1037,20 @@ private final class FloatingBarItemMouseView: NSView {
         guard isTrackingLeftMouse else { return }
         guard onDragStarted != nil else { return }
         let mouse = NSEvent.mouseLocation
-        var dx = mouse.x - anchorScreenX
+        let dx = mouse.x - anchorScreenX
         let dy = mouse.y - anchorScreenY
 
         if !didEnterDrag {
-            guard hypot(dx, dy) >= 5.0 else { return }
+            guard hypot(dx, dy) >= 3.5 else { return }
             didEnterDrag = true
+            anchorScreenX = mouse.x
             onPressedChanged?(false)
             onDragStarted?()
+            onDragOffsetChanged?(0)
+            return
         }
 
-        if let onStepSwap {
-            let slotStride: CGFloat = 45.0
-            let swapThreshold: CGFloat = 23.0
-            while dx >= swapThreshold && onStepSwap(1) {
-                anchorScreenX += slotStride
-                dx -= slotStride
-            }
-            while dx <= -swapThreshold && onStepSwap(-1) {
-                anchorScreenX -= slotStride
-                dx += slotStride
-            }
-        }
-        onDragOffsetChanged?(max(-34, min(34, dx)))
+        onDragOffsetChanged?(dx)
     }
 
     override func mouseUp(with event: NSEvent) {

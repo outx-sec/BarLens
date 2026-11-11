@@ -9,6 +9,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     case sections
     case appearance
     case general
+    case guide
     case about
 
     var id: String { rawValue }
@@ -18,6 +19,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .sections:   return tr("分区管理", "Sections")
         case .appearance: return tr("外观", "Appearance")
         case .general:    return tr("通用", "General")
+        case .guide:      return tr("使用指南", "Guide")
         case .about:      return tr("关于", "About")
         }
     }
@@ -27,6 +29,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .sections:   return "rectangle.3.group"
         case .appearance: return "sparkles"
         case .general:    return "gearshape"
+        case .guide:      return "book.closed"
         case .about:      return "info.circle"
         }
     }
@@ -57,6 +60,7 @@ struct SettingsView: View {
                 case .sections:   SectionsSettingsView(engine: engine, catalog: catalog)
                 case .appearance: AppearanceSettingsView(engine: engine)
                 case .general:    GeneralSettingsView(engine: engine, catalog: catalog)
+                case .guide:      GuideSettingsView(engine: engine)
                 case .about:      AboutSettingsView(engine: engine)
                 }
             }
@@ -79,6 +83,19 @@ struct SettingsView: View {
         .ignoresSafeArea()
         .frame(minWidth: 720, minHeight: 480)
         .preferredColorScheme(engine.appearanceMode.colorScheme)
+        .onAppear {
+            if let target = engine.requestedSettingsPane {
+                pane = target
+                engine.requestedSettingsPane = nil
+            }
+        }
+        .onChange(of: engine.requestedSettingsPane) { _, target in
+            guard let target else { return }
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                pane = target
+            }
+            engine.requestedSettingsPane = nil
+        }
         .onChange(of: pane) { _, newValue in Defaults.settingsPane = newValue.rawValue }
     }
 
@@ -103,7 +120,7 @@ struct SettingsView: View {
             .padding(.top, 8)
 
             VStack(spacing: 5) {
-                ForEach([SettingsPane.sections, .appearance, .general, .about]) { item in
+                ForEach([SettingsPane.sections, .appearance, .general, .guide, .about]) { item in
                     Button {
                         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
                             pane = item

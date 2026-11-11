@@ -45,7 +45,11 @@ final class SettingsWindowController: NSWindowController {
 
     /// Show the window, bringing it forward. The app has no Dock icon and is not
     /// the active application, so it has to ask for activation explicitly.
-    func present() {
+    func present(pane: SettingsPane? = nil) {
+        if let pane {
+            Defaults.settingsPane = pane.rawValue
+            engine.requestedSettingsPane = pane
+        }
         syncAppearance()
         placeOnActiveScreenIfNeeded()
         hasPresentedOnce = true

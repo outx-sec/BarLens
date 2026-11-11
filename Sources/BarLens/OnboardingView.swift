@@ -1,0 +1,668 @@
+import AppKit
+import SwiftUI
+
+/// Hosts the first-launch interactive Liquid Glass onboarding tour.
+final class OnboardingWindowController: NSWindowController {
+    private let engine: DividerEngine
+    private let onOpenSettings: (SettingsPane) -> Void
+
+    init(engine: DividerEngine, onOpenSettings: @escaping (SettingsPane) -> Void) {
+        self.engine = engine
+        self.onOpenSettings = onOpenSettings
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 660, height: 520),
+            styleMask: [.titled, .closable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = tr("欢迎使用 BarLens", "Welcome to BarLens")
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .none
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.isMovableByWindowBackground = true
+        window.isReleasedWhenClosed = false
+        window.appearance = engine.appearanceMode.nsAppearance
+
+        super.init(window: window)
+
+        let rootView = OnboardingView(
+            engine: engine,
+            onFinishToSettings: { [weak self] targetPane in
+                Defaults.hasCompletedOnboarding = true
+                Defaults.hasShownWelcome = true
+                self?.close()
+                self?.onOpenSettings(targetPane)
+            },
+            onDismissOnly: { [weak self] in
+                Defaults.hasCompletedOnboarding = true
+                Defaults.hasShownWelcome = true
+                self?.close()
+            }
+        )
+        let hosting = NSHostingController(rootView: rootView)
+        window.contentViewController = hosting
+        window.setContentSize(NSSize(width: 660, height: 520))
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("not used")
+    }
+
+    func syncAppearance() {
+        window?.appearance = engine.appearanceMode.nsAppearance
+    }
+
+    func present() {
+        syncAppearance()
+        if let window {
+            // Reset root view to step 0 when replaying from Settings.
+            let freshRoot = OnboardingView(
+                engine: engine,
+                onFinishToSettings: { [weak self] targetPane in
+                    Defaults.hasCompletedOnboarding = true
+                    Defaults.hasShownWelcome = true
+                    self?.close()
+                    self?.onOpenSettings(targetPane)
+                },
+                onDismissOnly: { [weak self] in
+                    Defaults.hasCompletedOnboarding = true
+                    Defaults.hasShownWelcome = true
+                    self?.close()
+                }
+            )
+            if let hosting = window.contentViewController as? NSHostingController<OnboardingView> {
+                hosting.rootView = freshRoot
+            }
+            let mouse = NSEvent.mouseLocation
+            let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
+            if let visible = screen?.visibleFrame {
+                window.setFrameOrigin(NSPoint(
+                    x: visible.midX - window.frame.width / 2,
+                    y: visible.midY - window.frame.height / 2
+                ))
+            }
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        showWindow(nil)
+        window?.makeKeyAndOrderFront(nil)
+    }
+}
+
+// MARK: - Interactive 4-Step Onboarding View
+
+struct OnboardingView: View {
+    @ObservedObject var engine: DividerEngine
+    let onFinishToSettings: (SettingsPane) -> Void
+    let onDismissOnly: () -> Void
+
+    @State private var step = 0
+    @AppStorage("glassOpacity") private var glassOpacity: Double = 0.28
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorScheme) private var colorScheme
+
+    private let totalSteps = 4
+
+    var body: some View {
+        VStack(spacing: 0) {
+            topBar
+            Divider().opacity(0.35)
+
+            Group {
+                switch step {
+                case 0: stepWelcomePermissions
+                case 1: stepSectionsModel
+                case 2: stepPresentationAndGlass
+                default: stepGesturesAndFinish
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal, 28)
+            .padding(.vertical, 20)
+
+            Divider().opacity(0.35)
+            bottomBar
+        }
+        .settingsGlass(cornerRadius: 22)
+        .padding(12)
+        .padding(.top, 24)
+        .background {
+            if reduceTransparency {
+                Color(nsColor: .windowBackgroundColor)
+            } else {
+                ZStack {
+                    SettingsBackdrop()
+                    (colorScheme == .dark ? Color.black : Color.white)
+                        .opacity(glassOpacity * 0.52)
+                }
+            }
+        }
+        .ignoresSafeArea()
+        .frame(width: 660, height: 520)
+        .preferredColorScheme(engine.appearanceMode.colorScheme)
+    }
+
+    // MARK: - Top & Bottom Chrome
+
+    private var topBar: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 24, height: 24)
+                Text("BarLens")
+                    .font(.system(size: 13.5, weight: .semibold, design: .rounded))
+            }
+
+            Spacer()
+
+            // Step indicator pills
+            HStack(spacing: 6) {
+                ForEach(0..<totalSteps, id: \.self) { idx in
+                    Capsule()
+                        .fill(idx == step ? Color.accentColor : Color.primary.opacity(0.16))
+                        .frame(width: idx == step ? 22 : 7, height: 7)
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: step)
+                }
+            }
+
+            Spacer()
+
+            Menu {
+                ForEach(AppLanguage.allCases) { lang in
+                    Button {
+                        engine.setAppLanguage(lang)
+                    } label: {
+                        HStack {
+                            Text(lang.title)
+                            if engine.appLanguage == lang {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "globe")
+                    Text(engine.appLanguage.title)
+                }
+                .font(.system(size: 11, weight: .medium))
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 13)
+    }
+
+    private var bottomBar: some View {
+        HStack {
+            if step == 0 {
+                Button(tr("稍后自行探索", "Skip Tour"), action: onDismissOnly)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            } else {
+                Button {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+                        step = max(0, step - 1)
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                        Text(tr("上一步", "Back"))
+                    }
+                }
+                .controlSize(.regular)
+            }
+
+            Spacer()
+
+            if step < totalSteps - 1 {
+                Button {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+                        step = min(totalSteps - 1, step + 1)
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Text(tr("下一步", "Continue"))
+                        Image(systemName: "chevron.right")
+                    }
+                    .padding(.horizontal, 6)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+            } else {
+                HStack(spacing: 10) {
+                    Button(tr("查看完整指南", "User Guide")) {
+                        onFinishToSettings(.guide)
+                    }
+                    .controlSize(.regular)
+
+                    Button {
+                        onFinishToSettings(.sections)
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "checkmark.circle.fill")
+                            Text(tr("开始配置分区", "Configure Sections"))
+                        }
+                        .padding(.horizontal, 6)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+                }
+            }
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 13)
+    }
+
+    // MARK: - Step 0: Welcome & Environment Check
+
+    private var stepWelcomePermissions: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(tr("欢迎使用 BarLens · 栏镜", "Welcome to BarLens"))
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                Text(tr(
+                    "专为 macOS 27 原生菜单栏架构打造的液态光学玻璃图标管理器。开始前请确认以下两项环境准备：",
+                    "A native Liquid Glass menu bar manager built for macOS 27. Verify these quick checks to get started:"
+                ))
+                .font(.system(size: 12.5))
+                .foregroundStyle(.secondary)
+            }
+
+            VStack(spacing: 10) {
+                OnboardingCheckCard(
+                    symbol: engine.isInstalledCorrectly ? "checkmark.circle.fill" : "folder.badge.questionmark",
+                    tint: engine.isInstalledCorrectly ? .green : .orange,
+                    title: tr("安装在「应用程序 (/Applications)」目录", "Installed in /Applications"),
+                    subtitle: engine.isInstalledCorrectly
+                        ? tr("位置正确，系统 MenuBarAgent 已按 Bundle ID 正常记账。", "Verified — MenuBarAgent tracks BarLens by bundle identifier.")
+                        : tr("请将 BarLens.app 移入 /Applications 后重新打开，否则隐藏时自身图标会被过滤。", "Move BarLens.app to /Applications so MenuBarAgent preserves its trigger icon."),
+                    actionTitle: engine.isInstalledCorrectly ? nil : tr("在访达中显示", "Show in Finder")
+                ) {
+                    NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
+                }
+
+                OnboardingCheckCard(
+                    symbol: engine.hasAccessibility ? "checkmark.shield.fill" : "hand.raised.fill",
+                    tint: engine.hasAccessibility ? .green : .accentColor,
+                    title: tr("授予「辅助功能」权限", "Accessibility Permission"),
+                    subtitle: engine.hasAccessibility
+                        ? tr("已授权，支持扫描菜单栏图标与悬浮栏原位点击触发。", "Granted — ready to enumerate status items and proxy menu clicks.")
+                        : tr("用于识别菜单栏图标并在悬浮栏内点击时打开对应原生菜单（无需屏幕录制权限）。", "Required to detect menu bar icons and open their menus from the Floating Bar (no Screen Recording needed)."),
+                    actionTitle: engine.hasAccessibility ? nil : tr("前往授权", "Grant Access")
+                ) {
+                    engine.requestAccessibility()
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+
+                OnboardingCheckCard(
+                    symbol: "lock.shield.fill",
+                    tint: .teal,
+                    title: tr("双进程防崩溃保护已激活", "Crash-Safe Guardian Active"),
+                    subtitle: tr(
+                        "独立守护进程 BarLensAgent 实时监测心跳——退出或强退 App 时所有隐藏图标将在 150ms 内自动恢复。",
+                        "BarLensAgent monitors app heartbeat — quitting or force-quitting restores every hidden icon within 150ms."
+                    ),
+                    actionTitle: nil,
+                    action: {}
+                )
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    // MARK: - Step 1: Three-Tier Section Model
+
+    private var stepSectionsModel: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(tr("三段式菜单栏分区", "Three-Tier Menu Bar Sections"))
+                    .font(.system(size: 21, weight: .bold, design: .rounded))
+                Text(tr(
+                    "告别混乱拥挤的刘海屏顶栏——支持全部第三方应用以及 macOS 27 内置的全部 18 项系统菜单栏控件：",
+                    "Organize every third-party app and all 18 built-in macOS 27 system menu extras into three clean tiers:"
+                ))
+                .font(.system(size: 12.5))
+                .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 10) {
+                OnboardingTierCard(
+                    symbol: "eye.fill",
+                    tint: SectionModel.Section.visible.tint,
+                    title: tr("始终显示", "Visible"),
+                    desc: tr("高频核心图标，始终固定在系统顶栏右侧。", "Core daily items kept permanently on the top menu bar.")
+                )
+                OnboardingTierCard(
+                    symbol: "sparkles.rectangle.stack",
+                    tint: SectionModel.Section.hidden.tint,
+                    title: tr("可隐藏", "Hidden"),
+                    desc: tr("日常收起，单击、悬停或下滑手势时在悬浮栏展开。", "Tucked away until you click, hover, or swipe the trigger.")
+                )
+                OnboardingTierCard(
+                    symbol: "eye.slash.fill",
+                    tint: SectionModel.Section.alwaysHidden.tint,
+                    title: tr("永久隐藏", "Always Hidden"),
+                    desc: tr("低频常驻后台，仅在双击或点按紫色 +N 胶囊时现身。", "Rarely needed daemons, shown only on double-click or +N peek.")
+                )
+            }
+
+            VStack(spacing: 10) {
+                HStack {
+                    Label(tr("启用「永久隐藏」第三分区", "Enable “Always Hidden” Third Tier"), systemImage: "eye.slash.fill")
+                        .font(.system(size: 12.5, weight: .medium))
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { engine.alwaysHiddenEnabled },
+                        set: { engine.setAlwaysHiddenEnabled($0) }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .opticalPlatter(cornerRadius: 12, isSelected: false)
+
+                HStack {
+                    Label(tr("新安装应用的默认归属", "Default Section for New Apps"), systemImage: "app.badge")
+                        .font(.system(size: 12.5, weight: .medium))
+                    Spacer()
+                    Picker("", selection: Binding(
+                        get: { engine.unclassifiedSection },
+                        set: { engine.setUnclassifiedSection($0) }
+                    )) {
+                        Text(SectionModel.Section.visible.title).tag(SectionModel.Section.visible)
+                        Text(SectionModel.Section.hidden.title).tag(SectionModel.Section.hidden)
+                    }
+                    .labelsHidden()
+                    .frame(width: 140)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .opticalPlatter(cornerRadius: 12, isSelected: false)
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    // MARK: - Step 2: Presentation & Liquid Glass
+
+    private var stepPresentationAndGlass: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(tr("选择展开方式与图标质感", "Choose Your Reveal Style"))
+                    .font(.system(size: 21, weight: .bold, design: .rounded))
+                Text(tr(
+                    "以下选项均实时生效，之后随时可在「设置 → 外观」或右键悬浮栏齿轮修改：",
+                    "Changes apply live immediately and can be adjusted anytime in Settings → Appearance:"
+                ))
+                .font(.system(size: 12.5))
+                .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 12) {
+                OnboardingChoiceCard(
+                    isSelected: engine.revealPresentationStyle == .floatingBar,
+                    symbol: "menubar.dock.rectangle.badge.record",
+                    title: tr("Liquid Glass 悬浮菜单栏（推荐）", "Liquid Glass Floating Bar"),
+                    subtitle: tr("在顶栏下方 4pt 展开光学玻璃胶囊，不挤占刘海空间，支持自由拖拽排序。", "Unfurls a 4-layer optical capsule below the menu bar — immune to notch overflow.")
+                ) {
+                    engine.setRevealPresentationStyle(.floatingBar)
+                }
+
+                OnboardingChoiceCard(
+                    isSelected: engine.revealPresentationStyle == .inline,
+                    symbol: "menubar.rectangle",
+                    title: tr("系统菜单栏内直接展开", "Inline Menu Bar"),
+                    subtitle: tr("直接在顶部原生系统菜单栏内临时放行并展示隐藏的图标。", "Temporarily reveals hidden icons directly inside the top macOS menu bar.")
+                ) {
+                    engine.setRevealPresentationStyle(.inline)
+                }
+            }
+
+            if engine.revealPresentationStyle == .floatingBar {
+                HStack {
+                    Label(tr("悬浮栏图标渲染", "Floating Bar Icon Style"), systemImage: "square.on.circle")
+                        .font(.system(size: 12.5, weight: .medium))
+                    Spacer()
+                    Picker("", selection: Binding(
+                        get: { engine.floatingBarIconStyle },
+                        set: { engine.setFloatingBarIconStyle($0) }
+                    )) {
+                        ForEach(FloatingBarIconDisplayStyle.allCases) { style in
+                            Text(style.title).tag(style)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 290)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .opticalPlatter(cornerRadius: 12, isSelected: false)
+            }
+
+            HStack {
+                Label(tr("顶栏触发图标样式", "Menu Bar Trigger Icon"), systemImage: "sparkles")
+                    .font(.system(size: 12.5, weight: .medium))
+                Spacer()
+                HStack(spacing: 6) {
+                    ForEach(StatusBarIconStyle.allCases) { style in
+                        let selected = engine.statusBarIconStyle == style
+                        Button {
+                            engine.setStatusBarIconStyle(style)
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: style.previewSymbol)
+                                    .font(.system(size: 11.5, weight: .semibold))
+                                Text(style.title)
+                                    .font(.system(size: 11, weight: selected ? .semibold : .regular))
+                            }
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 5)
+                            .foregroundStyle(selected ? Color.accentColor : .primary)
+                            .opticalPlatter(cornerRadius: 8, isSelected: selected, tint: .accentColor)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .opticalPlatter(cornerRadius: 12, isSelected: false)
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    // MARK: - Step 3: Gestures & Pro Tips
+
+    private var stepGesturesAndFinish: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(tr("手势、丝滑拖拽与快捷操作", "Gestures, Dragging & Quick Actions"))
+                    .font(.system(size: 21, weight: .bold, design: .rounded))
+                Text(tr(
+                    "无需每次打开设置窗口，日常操作一指直达：",
+                    "Master everyday interactions right from your menu bar:"
+                ))
+                .font(.system(size: 12.5))
+                .foregroundStyle(.secondary)
+            }
+
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                OnboardingTipCard(
+                    symbol: "cursorarrow.click.2",
+                    tint: .blue,
+                    title: tr("单击 · 双击 · 悬停", "Click · Double-Click · Hover"),
+                    detail: tr("单击展开「可隐藏」，双击展开全部；还可在「通用」开启悬停自动展开。", "Click for Hidden, double-click for All, or enable optional hover-to-reveal in General.")
+                )
+                OnboardingTipCard(
+                    symbol: "hand.draw.fill",
+                    tint: .teal,
+                    title: tr("双指滑动与鼠标滚轮", "Trackpad Swipe & Scroll"),
+                    detail: tr("在顶栏触发图标上「下滑 / 左滑」逐级展开，「上滑 / 右滑」或悬浮栏上滑收起。", "Swipe/scroll down or left on the trigger to reveal; swipe up or right to collapse.")
+                )
+                OnboardingTipCard(
+                    symbol: "hand.point.up.left.fill",
+                    tint: .purple,
+                    title: tr("1:1 丝滑拖拽排序", "1:1 Drag Reordering"),
+                    detail: tr("在悬浮栏内按住任意图标左右拖动即可实时换位，松手自动记忆排序。", "Hold and drag any icon left or right inside the Floating Bar to arrange your layout.")
+                )
+                OnboardingTipCard(
+                    symbol: "contextualmenu.and.cursorarrow",
+                    tint: .pink,
+                    title: tr("右键菜单与速览面板", "Right-Click Menus"),
+                    detail: tr("右键顶栏触发图标打开「速览面板」；右键悬浮栏内图标可快速调序、换区或退出应用。", "Right-click the trigger for Quick Panel; right-click any Floating Bar icon for quick actions.")
+                )
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+// MARK: - Subviews
+
+private struct OnboardingCheckCard: View {
+    let symbol: String
+    let tint: Color
+    let title: String
+    let subtitle: String
+    let actionTitle: String?
+    let action: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 34, height: 34)
+                .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                Text(subtitle)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 8)
+
+            if let actionTitle {
+                Button(actionTitle, action: action)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .opticalPlatter(cornerRadius: 13, isSelected: false)
+    }
+}
+
+private struct OnboardingTierCard: View {
+    let symbol: String
+    let tint: Color
+    let title: String
+    let desc: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 7) {
+                Image(systemName: symbol)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: 26, height: 26)
+                    .background(tint.opacity(0.13), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+            }
+            Text(desc)
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: 118, alignment: .topLeading)
+        .padding(12)
+        .opticalPlatter(cornerRadius: 13, isSelected: false)
+    }
+}
+
+private struct OnboardingChoiceCard: View {
+    let isSelected: Bool
+    let symbol: String
+    let title: String
+    let subtitle: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: symbol)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                    Spacer()
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 14))
+                        .foregroundStyle(isSelected ? Color.accentColor : .secondary.opacity(0.45))
+                }
+                Text(title)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Text(subtitle)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, maxHeight: 116, alignment: .topLeading)
+            .padding(13)
+            .opticalPlatter(cornerRadius: 13, isSelected: isSelected, tint: .accentColor)
+            .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct OnboardingTipCard: View {
+    let symbol: String
+    let tint: Color
+    let title: String
+    let detail: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                Image(systemName: symbol)
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: 28, height: 28)
+                    .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                Text(title)
+                    .font(.system(size: 12.5, weight: .semibold))
+            }
+            Text(detail)
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: 118, alignment: .topLeading)
+        .padding(13)
+        .opticalPlatter(cornerRadius: 13, isSelected: false)
+    }
+}

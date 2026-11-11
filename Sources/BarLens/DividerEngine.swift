@@ -188,6 +188,10 @@ final class DividerEngine: ObservableObject {
             if isContextMenuOpen != oldValue { scheduleAutoRehideIfNeeded() }
         }
     }
+    /// Optional programmatic navigation target for `SettingsView`.
+    @Published var requestedSettingsPane: SettingsPane?
+    /// Optional hook set by `DividerController` to present the interactive onboarding tour.
+    var onReplayOnboarding: (() -> Void)?
     private var lastAgentStart = Date.distantPast
     private var lastMenuBarAgentPID: pid_t?
     private var operationGeneration = 0
@@ -1376,6 +1380,14 @@ final class DividerEngine: ObservableObject {
         hoverRevealDelay = delay
         Defaults.hoverRevealDelay = delay
         onChange?()
+    }
+
+    func moveFloatingBarItemToIndex(_ itemID: String, toIndex: Int, within currentIDs: [String]) {
+        var updated = floatingBarOrder
+        updated.moveToIndex(itemID: itemID, toIndex: toIndex, within: currentIDs)
+        guard updated != floatingBarOrder else { return }
+        floatingBarOrder = updated
+        Defaults.floatingBarOrder = updated
     }
 
     func moveFloatingBarItem(_ movingID: String, to targetID: String, within currentIDs: [String]) {

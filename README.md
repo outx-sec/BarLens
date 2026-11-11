@@ -56,6 +56,7 @@ Visible (始终显示)   ·   Hidden (可隐藏)   ·   Always Hidden (永久隐
 - **Per-Application Grouping**: Hiding operates by bundle identifier, so multi-icon apps move together cleanly without stranding orphan status items.
 - **One-Click Peek Pill**: When **Always Hidden** items exist, a compact purple glass badge (`+N`) appears inside the floating bar so you can peek at rarely used items on demand.
 - **Portable JSON Profile Backup**: Export and import your entire configuration (sections, custom icon order, hotkeys, and Liquid Glass optical tuning) as a single `BarLens-Profile.json` file.
+- **Interactive Onboarding & Built-In User Guide**: First-launch 4-step Liquid Glass setup tour (live `/Applications` & Accessibility checks, section setup, presentation picker, and gesture cheat sheet) plus an in-app **Guide (`使用指南`)** pane accessible anytime.
 - **Live Bilingual UI**: Switch dynamically between **Follow System**, **English**, and **简体中文** from Settings or via the floating bar gear context menu.
 
 ### 3. Complete Support for All 18 macOS 27 System Menu Bar Items

@@ -8,6 +8,7 @@ struct QuickPanelView: View {
     @ObservedObject var catalog: Catalog
     var onReveal: (SectionModel.Reveal) -> Void
     var onManage: () -> Void
+    var onOpenGuide: () -> Void = {}
     var onReconnect: () -> Void
     var onAssign: (SectionModel.Section) -> Void
     var onQuit: () -> Void
@@ -401,6 +402,13 @@ struct QuickPanelView: View {
                 }
                 .buttonStyle(QuickPanelButtonStyle()).keyboardShortcut(",", modifiers: .command)
                 Spacer()
+                Button(action: onOpenGuide) {
+                    Image(systemName: "book.closed").font(.system(size: 12))
+                        .frame(width: 28, height: 28).contentShape(RoundedRectangle(cornerRadius: 7))
+                }
+                .buttonStyle(QuickPanelButtonStyle())
+                .foregroundStyle(.secondary)
+                .help(tr("查看使用指南", "Open User Guide")).accessibilityLabel(tr("查看使用指南", "Open User Guide"))
                 Button(action: onReconnect) {
                     Image(systemName: "arrow.clockwise").font(.system(size: 12))
                         .frame(width: 28, height: 28).contentShape(RoundedRectangle(cornerRadius: 7))
