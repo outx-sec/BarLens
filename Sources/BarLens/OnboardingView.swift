@@ -411,12 +411,12 @@ struct OnboardingView: View {
     private var stepPresentationAndGlass: some View {
         VStack(alignment: .leading, spacing: 15) {
             VStack(alignment: .leading, spacing: 5) {
-                Text(tr("选择展开方式与图标质感", "Choose Your Reveal Style"))
+                Text(tr("展开方式与图标样式", "Choose Reveal & Icon Style"))
                     .font(.system(size: 21, weight: .bold, design: .rounded))
                     .foregroundStyle(.primary)
                 Text(tr(
-                    "以下选项均实时生效，之后随时可在「设置 → 外观」或右键悬浮栏齿轮修改：",
-                    "Changes apply live immediately and can be adjusted anytime in Settings → Appearance:"
+                    "选项即时生效，之后可在「设置 → 外观」随时调整：",
+                    "Changes apply live and can be changed anytime in Settings → Appearance:"
                 ))
                 .font(.system(size: 12.5))
                 .foregroundStyle(.primary.opacity(0.78))
@@ -426,8 +426,8 @@ struct OnboardingView: View {
                 OnboardingChoiceCard(
                     isSelected: engine.revealPresentationStyle == .floatingBar,
                     symbol: "menubar.dock.rectangle.badge.record",
-                    title: tr("Liquid Glass 悬浮菜单栏（推荐）", "Liquid Glass Floating Bar"),
-                    subtitle: tr("在顶栏下方 4pt 展开光学玻璃胶囊，不挤占刘海空间，支持自由拖拽排序。", "Unfurls a 4-layer optical capsule below the menu bar — immune to notch overflow.")
+                    title: tr("悬浮栏（推荐）", "Floating Bar"),
+                    subtitle: tr("在顶栏下方展开玻璃胶囊，不挤占刘海空间，支持拖拽排序。", "Opens below the menu bar — immune to notch overflow and supports drag reordering.")
                 ) {
                     engine.setRevealPresentationStyle(.floatingBar)
                 }
@@ -435,8 +435,8 @@ struct OnboardingView: View {
                 OnboardingChoiceCard(
                     isSelected: engine.revealPresentationStyle == .inline,
                     symbol: "menubar.rectangle",
-                    title: tr("系统菜单栏内直接展开", "Inline Menu Bar"),
-                    subtitle: tr("直接在顶部原生系统菜单栏内临时放行并展示隐藏的图标。", "Temporarily reveals hidden icons directly inside the top macOS menu bar.")
+                    title: tr("菜单栏内展开", "Inline Menu Bar"),
+                    subtitle: tr("直接在系统顶部菜单栏内临时展开隐藏图标。", "Temporarily expands hidden icons directly inside the top menu bar.")
                 ) {
                     engine.setRevealPresentationStyle(.inline)
                 }
@@ -447,7 +447,7 @@ struct OnboardingView: View {
                     Image(systemName: "square.on.circle")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(BarLensPalette.ink(.purple, in: colorScheme))
-                    Text(tr("悬浮栏图标渲染", "Floating Bar Icon Style"))
+                    Text(tr("图标样式", "Icon Style"))
                         .font(.system(size: 12.5, weight: .medium))
                         .foregroundStyle(.primary)
                     Spacer()
@@ -460,7 +460,7 @@ struct OnboardingView: View {
                         }
                     }
                     .pickerStyle(.segmented)
-                    .frame(width: 290)
+                    .frame(width: 170)
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
@@ -471,7 +471,7 @@ struct OnboardingView: View {
                 Image(systemName: "sparkles")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(BarLensPalette.ink(.cyan, in: colorScheme))
-                Text(tr("顶栏触发图标样式", "Menu Bar Trigger Icon"))
+                Text(tr("顶栏图标", "Menu Bar Icon"))
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(.primary)
                 Spacer()

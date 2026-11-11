@@ -9,9 +9,9 @@ private enum PreviewBackdropStyle: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .nebula: return tr("星云流光", "Nebula")
-        case .aurora: return tr("拂晓柔光", "Aurora")
-        case .white:  return tr("纯白桌面", "Daylight")
+        case .nebula: return tr("星云", "Nebula")
+        case .aurora: return tr("柔光", "Aurora")
+        case .white:  return tr("纯白", "White")
         }
     }
 }
@@ -35,10 +35,10 @@ private struct AppearancePreset: Identifiable {
     static let all: [AppearancePreset] = [
         AppearancePreset(
             id: "optimal",
-            titleZh: "最佳冰晶透镜",
-            titleEn: "Crystal Lens",
-            subtitleZh: "推荐 · 兼顾深浅背景对比度与 135° 折射立体感",
-            subtitleEn: "Recommended · Balanced contrast & 135° Fresnel refraction",
+            titleZh: "冰晶透镜",
+            titleEn: "Crystal",
+            subtitleZh: "推荐 · 均衡通透",
+            subtitleEn: "Recommended · Balanced",
             symbol: "sparkles",
             tone: .cyan,
             tint: .cyan,
@@ -48,10 +48,10 @@ private struct AppearancePreset: Identifiable {
         ),
         AppearancePreset(
             id: "obsidian",
-            titleZh: "深邃黑曜石",
-            titleEn: "Obsidian Glass",
-            subtitleZh: "深色烟熏高对比玻璃，契合深色顶部菜单栏",
-            subtitleEn: "Smoked dark-tinted glass tailored for dark menu bars",
+            titleZh: "黑曜石",
+            titleEn: "Obsidian",
+            subtitleZh: "深色高对比",
+            subtitleEn: "Smoked high contrast",
             symbol: "moon.stars.fill",
             tone: .indigo,
             tint: .indigo,
@@ -61,10 +61,10 @@ private struct AppearancePreset: Identifiable {
         ),
         AppearancePreset(
             id: "prism",
-            titleZh: "高透棱镜流光",
-            titleEn: "Prism Sheen",
-            subtitleZh: "低底色浓度 + 强折射亮边，通透轻盈",
-            subtitleEn: "Airy low-density tint with vivid specular rim highlights",
+            titleZh: "高透棱镜",
+            titleEn: "Prism",
+            subtitleZh: "清透强高光",
+            subtitleEn: "Airy with vivid rim",
             symbol: "drop.degreesign.fill",
             tone: .mint,
             tint: .mint,
@@ -78,8 +78,14 @@ private struct AppearancePreset: Identifiable {
 struct AppearanceSettingsView: View {
     @ObservedObject var engine: DividerEngine
     @State private var backdrop: PreviewBackdropStyle = .nebula
-    @State private var sampleActiveIndex: Int = 2
+    @State private var sampleActiveIndex: Int = 1
     @Environment(\.colorScheme) private var colorScheme
+
+    private let sampleItems: [(symbol: String, appColors: [Color])] = [
+        ("sparkles", [Color(red: 0.20, green: 0.52, blue: 0.98), Color(red: 0.42, green: 0.25, blue: 0.92)]),
+        ("bolt.horizontal.fill", [Color(red: 0.96, green: 0.36, blue: 0.58), Color(red: 0.58, green: 0.26, blue: 0.94)]),
+        ("terminal.fill", [Color(red: 0.14, green: 0.72, blue: 0.58), Color(red: 0.08, green: 0.46, blue: 0.68)]),
+    ]
 
     private func isPresetSelected(_ preset: AppearancePreset) -> Bool {
         let opacityMatch = abs(engine.glassOpacity - preset.opacity) < 0.02
@@ -94,7 +100,7 @@ struct AppearanceSettingsView: View {
                 livePreviewStage
             } header: {
                 HStack {
-                    Text(tr("实时效果预览", "Live Preview"))
+                    Text(tr("实时预览", "Live Preview"))
                     Spacer()
                     Picker(tr("预览背景", "Preview Backdrop"), selection: $backdrop) {
                         ForEach(PreviewBackdropStyle.allCases) { item in
@@ -104,11 +110,11 @@ struct AppearanceSettingsView: View {
                     .pickerStyle(.segmented)
                     .labelsHidden()
                     .controlSize(.small)
-                    .frame(width: 210)
+                    .frame(width: 170)
                 }
             }
 
-            Section(tr("一键最佳预设", "Optical Presets")) {
+            Section(tr("预设风格", "Presets")) {
                 HStack(spacing: 10) {
                     ForEach(AppearancePreset.all) { preset in
                         let selected = isPresetSelected(preset)
@@ -120,7 +126,7 @@ struct AppearanceSettingsView: View {
                             engine.setGlassOpacity(preset.opacity)
                             engine.setRimIntensity(preset.rim)
                         } label: {
-                            VStack(alignment: .leading, spacing: 6) {
+                            VStack(alignment: .leading, spacing: 5) {
                                 HStack(spacing: 6) {
                                     Image(systemName: preset.symbol)
                                         .font(.system(size: 12, weight: .semibold))
@@ -136,10 +142,9 @@ struct AppearanceSettingsView: View {
                                     }
                                 }
                                 Text(preset.subtitle)
-                                    .font(.system(size: 10.5))
+                                    .font(.system(size: 11))
                                     .foregroundStyle(.primary.opacity(0.75))
-                                    .lineLimit(2)
-                                    .multilineTextAlignment(.leading)
+                                    .lineLimit(1)
                             }
                             .padding(11)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -152,7 +157,7 @@ struct AppearanceSettingsView: View {
                 .padding(.vertical, 2)
             }
 
-            Section(tr("主题与呈现", "Theme & Presentation")) {
+            Section(tr("显示与图标", "Display & Icons")) {
                 Picker(
                     selection: Binding(
                         get: { engine.appearanceMode },
@@ -163,7 +168,7 @@ struct AppearanceSettingsView: View {
                         Text(mode.title).tag(mode)
                     }
                 } label: {
-                    AppearanceRowLabel(symbol: "circle.lefthalf.filled", tone: .indigo, title: tr("外观模式", "Appearance Mode"))
+                    AppearanceRowLabel(symbol: "circle.lefthalf.filled", tone: .indigo, title: tr("外观", "Appearance"))
                 }
                 .pickerStyle(.segmented)
 
@@ -177,7 +182,7 @@ struct AppearanceSettingsView: View {
                         Label(style.title, systemImage: style.previewSymbol).tag(style)
                     }
                 } label: {
-                    AppearanceRowLabel(symbol: "record.circle", tone: .blue, title: tr("顶部触发图标", "Menu Bar Trigger Icon"))
+                    AppearanceRowLabel(symbol: "record.circle", tone: .blue, title: tr("顶栏图标", "Menu Bar Icon"))
                 }
                 .pickerStyle(.menu)
 
@@ -185,7 +190,7 @@ struct AppearanceSettingsView: View {
                     selection: Binding(
                         get: { engine.revealPresentationStyle },
                         set: { style in
-                            withAnimation(.easeInOut(duration: 0.18)) {
+                            withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
                                 engine.setRevealPresentationStyle(style)
                             }
                         }
@@ -195,7 +200,7 @@ struct AppearanceSettingsView: View {
                         Text(style.title).tag(style)
                     }
                 } label: {
-                    AppearanceRowLabel(symbol: "Dock.rectangle", fallbackSymbol: "menubar.dock.rectangle", tone: .cyan, title: tr("展开呈现方式", "Reveal Style"))
+                    AppearanceRowLabel(symbol: "menubar.dock.rectangle", tone: .cyan, title: tr("展开方式", "Reveal Style"))
                 }
                 .pickerStyle(.segmented)
 
@@ -217,8 +222,7 @@ struct AppearanceSettingsView: View {
                         AppearanceRowLabel(
                             symbol: "circle.grid.cross",
                             tone: .purple,
-                            title: tr("悬浮栏图标渲染", "Floating Bar Icons"),
-                            subtitle: tr("仅在「悬浮菜单栏」下生效 · 单色模板或应用彩色实物图标", "Floating Bar only · Monochrome glyph or full-color app icon"),
+                            title: tr("图标样式", "Icon Style"),
                             isSubItem: true
                         )
                     }
@@ -226,7 +230,7 @@ struct AppearanceSettingsView: View {
                 }
             }
 
-            Section(tr("Liquid Glass 光学精调", "Liquid Glass Fine-Tuning")) {
+            Section(tr("玻璃质感", "Glass Tuning")) {
                 LabeledContent {
                     HStack(spacing: 10) {
                         Slider(
@@ -247,8 +251,7 @@ struct AppearanceSettingsView: View {
                     AppearanceRowLabel(
                         symbol: "drop.halffull",
                         tone: .mint,
-                        title: tr("玻璃浓度", "Glass Density"),
-                        subtitle: tr("调节透镜底色烟熏 / 冰晶浓度", "Adjust smoked / crystal tint density")
+                        title: tr("玻璃浓度", "Glass Density")
                     )
                 }
 
@@ -272,17 +275,16 @@ struct AppearanceSettingsView: View {
                     AppearanceRowLabel(
                         symbol: "sparkles",
                         tone: .cyan,
-                        title: tr("折射边强度", "Refractive Rim Intensity"),
-                        subtitle: tr("调节 135° 菲涅尔高光边缘与顶部焦散亮度", "Adjust 135° Fresnel specular rim & top caustic sheen")
+                        title: tr("边缘高光", "Rim Highlight")
                     )
                 }
 
                 HStack {
-                    Text(tr("提示：悬浮栏开启时，拖动滑块可同步实时预览桌面顶部悬浮栏效果。", "Tip: Drag sliders while the floating bar is open to preview live on your desktop."))
+                    Text(tr("悬浮栏开启时可同步看到桌面效果", "Updates live while Floating Bar is open"))
                         .font(.system(size: 11.5))
                         .foregroundStyle(.primary.opacity(0.75))
                     Spacer()
-                    Button(tr("恢复最佳默认", "Reset to Optimal")) {
+                    Button(tr("恢复默认", "Reset")) {
                         engine.applyOptimalAppearancePreset()
                     }
                     .controlSize(.small)
@@ -293,136 +295,279 @@ struct AppearanceSettingsView: View {
         .scrollContentBackground(.hidden)
     }
 
-    // MARK: - Live Preview Stage
+    // MARK: - Synchronized Live Preview Stage (Floating Bar vs Inline Menu Bar)
+
+    private var menuBarInk: Color {
+        backdrop == .nebula
+            ? Color.white.opacity(0.94)
+            : Color(red: 0.08, green: 0.10, blue: 0.16).opacity(0.92)
+    }
 
     private var livePreviewStage: some View {
-        let showAppIconStyle = engine.revealPresentationStyle == .floatingBar && engine.floatingBarIconStyle == .appIcon
-        return ZStack {
+        ZStack(alignment: .top) {
             previewBackground
-            VStack(spacing: 10) {
-                HStack(spacing: 8) {
-                    let sampleItems: [(symbol: String, appColors: [Color])] = [
-                        ("sparkles", [Color(red: 0.20, green: 0.52, blue: 0.98), Color(red: 0.42, green: 0.25, blue: 0.92)]),
-                        ("bolt.horizontal.fill", [Color(red: 0.96, green: 0.36, blue: 0.58), Color(red: 0.58, green: 0.26, blue: 0.94)]),
-                        ("terminal.fill", [Color(red: 0.14, green: 0.72, blue: 0.58), Color(red: 0.08, green: 0.46, blue: 0.68)]),
-                        ("wifi", []),
-                    ]
-                    ForEach(Array(sampleItems.enumerated()), id: \.offset) { index, item in
-                        let isActive = sampleActiveIndex == index
-                        Button {
-                            withAnimation(.easeOut(duration: 0.16)) {
-                                sampleActiveIndex = (sampleActiveIndex == index) ? -1 : index
-                            }
-                        } label: {
-                            Group {
-                                if showAppIconStyle, !item.appColors.isEmpty {
-                                    ZStack {
-                                        RoundedRectangle(cornerRadius: 5.5, style: .continuous)
-                                            .fill(
-                                                LinearGradient(
-                                                    colors: item.appColors,
-                                                    startPoint: .topLeading,
-                                                    endPoint: .bottomTrailing
-                                                )
-                                            )
-                                            .overlay {
-                                                RoundedRectangle(cornerRadius: 5.5, style: .continuous)
-                                                    .strokeBorder(Color.white.opacity(0.28), lineWidth: 0.6)
-                                            }
-                                        Image(systemName: item.symbol)
-                                            .font(.system(size: 11.5, weight: .bold))
-                                            .foregroundStyle(.white)
-                                    }
-                                    .frame(width: 21, height: 21)
-                                    .shadow(color: .black.opacity(0.20), radius: 2, y: 1)
-                                } else {
-                                    Image(systemName: item.symbol)
-                                        .font(.system(size: 14.5, weight: .semibold))
-                                        .foregroundStyle(isActive ? Color(red: 0.08, green: 0.10, blue: 0.16) : .primary)
-                                }
-                            }
-                            .frame(width: 36, height: 36)
-                            .background {
-                                if isActive {
-                                    Circle()
-                                        .inset(by: 0.5)
-                                        .fill(Color.white.opacity(colorScheme == .dark ? 0.92 : 0.96))
-                                        .shadow(color: Color.accentColor.opacity(0.28), radius: 5, y: 1.5)
-                                }
-                            }
-                            .contentShape(Circle())
-                        }
-                        .buttonStyle(.plain)
+
+            VStack(spacing: 0) {
+                simulatedTopMenuBar
+
+                if engine.revealPresentationStyle == .floatingBar {
+                    VStack(spacing: 7) {
+                        previewFloatingCapsule
+                            .padding(.top, 5)
+
+                        Text(tr("点按图标可测试激活高亮", "Click an icon to test active highlight"))
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(menuBarInk.opacity(0.88))
                     }
-
-                    if engine.alwaysHiddenEnabled {
-                        Rectangle()
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        Color.primary.opacity(0.02),
-                                        Color.primary.opacity(colorScheme == .dark ? 0.24 : 0.16),
-                                        Color.primary.opacity(0.02),
-                                    ],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                            )
-                            .frame(width: 1, height: 18)
-                            .padding(.horizontal, 2)
-
-                        HStack(spacing: 5) {
-                            Image(systemName: "eye.slash.fill")
-                                .font(.system(size: 11, weight: .semibold))
-                            Text("4")
-                                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                                .monospacedDigit()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                } else {
+                    VStack {
+                        Spacer(minLength: 0)
+                        HStack(spacing: 6) {
+                            Image(systemName: "menubar.rectangle")
+                                .font(.system(size: 11.5, weight: .semibold))
+                            Text(tr("隐藏图标在顶部菜单栏内直接展开", "Hidden icons expand directly in the top menu bar"))
+                                .font(.system(size: 11.5, weight: .medium))
                         }
-                        .foregroundStyle(
-                            colorScheme == .dark
-                                ? Color(red: 0.94, green: 0.82, blue: 1.0)
-                                : Color(red: 0.48, green: 0.12, blue: 0.64)
-                        )
+                        .foregroundStyle(menuBarInk)
                         .padding(.horizontal, 12)
-                        .frame(height: 34)
+                        .padding(.vertical, 6.5)
                         .background(
-                            LinearGradient(
-                                colors: [
-                                    Color.purple.opacity(colorScheme == .dark ? 0.32 : 0.20),
-                                    Color.purple.opacity(colorScheme == .dark ? 0.16 : 0.10),
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
+                            backdrop == .nebula
+                                ? Color.black.opacity(0.36)
+                                : Color.white.opacity(0.76),
                             in: Capsule()
                         )
                         .overlay {
-                            LiquidGlassRim(cornerRadius: 17, tint: .purple, intensity: 0.95)
+                            Capsule()
+                                .strokeBorder(menuBarInk.opacity(0.16), lineWidth: 0.75)
                         }
+                        Spacer(minLength: 0)
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .transition(.opacity)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .previewCapsuleGlass(cornerRadius: 25)
-                .shadow(color: .black.opacity(colorScheme == .dark ? 0.34 : 0.14), radius: 8, y: 4)
-
-                Text(tr("点按上方预览图标可测试激活高光态", "Click any preview icon above to test the active highlight state"))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(
-                        backdrop == .nebula
-                            ? Color.white.opacity(0.92)
-                            : Color(red: 0.10, green: 0.13, blue: 0.22).opacity(0.84)
-                    )
             }
-            .padding(.vertical, 16)
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 112)
+        .frame(height: 124)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.8)
         }
+        .animation(.spring(response: 0.28, dampingFraction: 0.86), value: engine.revealPresentationStyle)
+    }
+
+    private var simulatedTopMenuBar: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 7) {
+                Image(systemName: "apple.logo")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("BarLens")
+                    .font(.system(size: 11.5, weight: .semibold))
+            }
+            .foregroundStyle(menuBarInk)
+
+            Spacer(minLength: 8)
+
+            // Inline mode: hidden items expand right inside the top menu bar to the left of the trigger
+            if engine.revealPresentationStyle == .inline {
+                HStack(spacing: 4) {
+                    ForEach(Array(sampleItems.enumerated()), id: \.offset) { index, item in
+                        let isActive = sampleActiveIndex == index
+                        Button {
+                            withAnimation(.easeOut(duration: 0.14)) {
+                                sampleActiveIndex = (sampleActiveIndex == index) ? -1 : index
+                            }
+                        } label: {
+                            Image(systemName: item.symbol)
+                                .font(.system(size: 11.5, weight: .semibold))
+                                .foregroundStyle(
+                                    isActive
+                                        ? Color.white
+                                        : menuBarInk
+                                )
+                                .frame(width: 24, height: 20)
+                                .background {
+                                    if isActive {
+                                        RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+                                            .fill(BarLensPalette.selectionFill(in: colorScheme))
+                                    }
+                                }
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    if engine.alwaysHiddenEnabled {
+                        Image(systemName: "eye.slash.fill")
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(
+                                backdrop == .nebula
+                                    ? Color(red: 0.88, green: 0.72, blue: 1.0)
+                                    : Color(red: 0.48, green: 0.14, blue: 0.76)
+                            )
+                            .frame(width: 22, height: 20)
+                    }
+                }
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(
+                    menuBarInk.opacity(0.08),
+                    in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                )
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+
+            // Live BarLens trigger icon preview (dot / eclipse / capsule / sparkle)
+            HStack(spacing: 4) {
+                if engine.statusBarIconStyle == .dot {
+                    Circle()
+                        .fill(menuBarInk)
+                        .frame(width: 6.5, height: 6.5)
+                } else {
+                    Image(systemName: engine.statusBarIconStyle.previewSymbol)
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(menuBarInk)
+                }
+            }
+            .frame(width: 24, height: 20)
+            .background(
+                menuBarInk.opacity(0.14),
+                in: RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+            )
+
+            HStack(spacing: 8) {
+                Image(systemName: "wifi")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("9:41")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .monospacedDigit()
+            }
+            .foregroundStyle(menuBarInk.opacity(0.88))
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 28)
+        .background(
+            backdrop == .nebula
+                ? Color.black.opacity(0.38)
+                : Color.white.opacity(0.72)
+        )
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(menuBarInk.opacity(0.12))
+                .frame(height: 0.6)
+        }
+    }
+
+    private var previewFloatingCapsule: some View {
+        let showAppIconStyle = engine.floatingBarIconStyle == .appIcon
+        return HStack(spacing: 8) {
+            ForEach(Array(sampleItems.enumerated()), id: \.offset) { index, item in
+                let isActive = sampleActiveIndex == index
+                Button {
+                    withAnimation(.easeOut(duration: 0.16)) {
+                        sampleActiveIndex = (sampleActiveIndex == index) ? -1 : index
+                    }
+                } label: {
+                    Group {
+                        if showAppIconStyle {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 5.5, style: .continuous)
+                                    .fill(
+                                        LinearGradient(
+                                            colors: item.appColors,
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 5.5, style: .continuous)
+                                            .strokeBorder(Color.white.opacity(0.28), lineWidth: 0.6)
+                                    }
+                                Image(systemName: item.symbol)
+                                    .font(.system(size: 11.5, weight: .bold))
+                                    .foregroundStyle(.white)
+                            }
+                            .frame(width: 21, height: 21)
+                            .shadow(color: .black.opacity(0.20), radius: 2, y: 1)
+                        } else {
+                            Image(systemName: item.symbol)
+                                .font(.system(size: 14.5, weight: .semibold))
+                                .foregroundStyle(isActive ? Color(red: 0.08, green: 0.10, blue: 0.16) : .primary)
+                        }
+                    }
+                    .frame(width: 35, height: 35)
+                    .background {
+                        if isActive {
+                            Circle()
+                                .inset(by: 0.5)
+                                .fill(Color.white.opacity(colorScheme == .dark ? 0.92 : 0.96))
+                                .shadow(color: Color.accentColor.opacity(0.28), radius: 5, y: 1.5)
+                        }
+                    }
+                    .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+            }
+
+            Image(systemName: "wifi")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 35, height: 35)
+
+            if engine.alwaysHiddenEnabled {
+                Rectangle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.primary.opacity(0.02),
+                                Color.primary.opacity(colorScheme == .dark ? 0.24 : 0.16),
+                                Color.primary.opacity(0.02),
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .frame(width: 1, height: 18)
+                    .padding(.horizontal, 2)
+
+                HStack(spacing: 5) {
+                    Image(systemName: "eye.slash.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("4")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                }
+                .foregroundStyle(
+                    colorScheme == .dark
+                        ? Color(red: 0.94, green: 0.82, blue: 1.0)
+                        : Color(red: 0.48, green: 0.12, blue: 0.64)
+                )
+                .padding(.horizontal, 11)
+                .frame(height: 33)
+                .background(
+                    LinearGradient(
+                        colors: [
+                            Color.purple.opacity(colorScheme == .dark ? 0.32 : 0.20),
+                            Color.purple.opacity(colorScheme == .dark ? 0.16 : 0.10),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    in: Capsule()
+                )
+                .overlay {
+                    LiquidGlassRim(cornerRadius: 17, tint: .purple, intensity: 0.95)
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .previewCapsuleGlass(cornerRadius: 24)
+        .shadow(color: .black.opacity(colorScheme == .dark ? 0.34 : 0.14), radius: 8, y: 4)
     }
 
     @ViewBuilder
@@ -443,12 +588,12 @@ struct AppearanceSettingsView: View {
                     .fill(Color(red: 1.0, green: 0.23, blue: 0.55).opacity(0.55))
                     .frame(width: 110, height: 110)
                     .blur(radius: 24)
-                    .offset(x: -95, y: -15)
+                    .offset(x: -95, y: -10)
                 Circle()
                     .fill(Color(red: 0.22, green: 0.56, blue: 1.0).opacity(0.58))
                     .frame(width: 130, height: 130)
                     .blur(radius: 26)
-                    .offset(x: 85, y: 10)
+                    .offset(x: 85, y: 15)
             }
         case .aurora:
             ZStack {
@@ -465,12 +610,12 @@ struct AppearanceSettingsView: View {
                     .fill(Color(red: 1.0, green: 0.58, blue: 0.72).opacity(0.55))
                     .frame(width: 110, height: 110)
                     .blur(radius: 22)
-                    .offset(x: -85, y: -10)
+                    .offset(x: -85, y: -5)
                 Circle()
                     .fill(Color(red: 0.38, green: 0.78, blue: 0.98).opacity(0.55))
                     .frame(width: 120, height: 120)
                     .blur(radius: 24)
-                    .offset(x: 90, y: 12)
+                    .offset(x: 90, y: 15)
             }
         case .white:
             Color.white

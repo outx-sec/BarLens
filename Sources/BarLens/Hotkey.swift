@@ -68,8 +68,8 @@ enum HotkeyAction: String, CaseIterable, Identifiable, Codable {
 
     var title: String {
         switch self {
-        case .toggleHidden:       return tr("显示 / 收起「可隐藏」段", "Toggle Hidden Section")
-        case .toggleAlwaysHidden: return tr("显示 / 收起「永久隐藏」段", "Toggle Always-Hidden Section")
+        case .toggleHidden:       return tr("展开 / 收起可隐藏", "Toggle Hidden")
+        case .toggleAlwaysHidden: return tr("展开 / 收起永久隐藏", "Toggle Always Hidden")
         }
     }
 }

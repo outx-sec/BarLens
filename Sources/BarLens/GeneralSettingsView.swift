@@ -21,7 +21,7 @@ struct GeneralSettingsView: View {
                 Toggle(isOn: Binding(
                     get: { engine.alwaysHiddenEnabled },
                     set: { engine.setAlwaysHiddenEnabled($0) })) {
-                    PreferenceLabel(symbol: "eye.slash.fill", tone: .indigo, title: tr("启用「永久隐藏」", "Enable “Always Hidden” Section"))
+                    PreferenceLabel(symbol: "eye.slash.fill", tone: .indigo, title: tr("启用「永久隐藏」", "Enable Always Hidden"))
                 }
                 .toggleStyle(.switch)
 
@@ -32,7 +32,7 @@ struct GeneralSettingsView: View {
                         Text(delay.title).tag(delay)
                     }
                 } label: {
-                    PreferenceLabel(symbol: "cursorarrow.motionlines", tone: .purple, title: tr("悬停触发图标展开", "Hover Trigger to Reveal"))
+                    PreferenceLabel(symbol: "cursorarrow.motionlines", tone: .purple, title: tr("悬停展开", "Hover to Reveal"))
                 }
                 .pickerStyle(.menu)
 
@@ -43,7 +43,7 @@ struct GeneralSettingsView: View {
                         Text(interval.title).tag(interval)
                     }
                 } label: {
-                    PreferenceLabel(symbol: "timer", tone: .orange, title: tr("展开后自动收起", "Auto-Collapse After"))
+                    PreferenceLabel(symbol: "timer", tone: .orange, title: tr("自动收起", "Auto-Collapse"))
                 }
                 .pickerStyle(.menu)
 
@@ -54,14 +54,14 @@ struct GeneralSettingsView: View {
                         Text(lang.title).tag(lang)
                     }
                 } label: {
-                    PreferenceLabel(symbol: "globe", tone: .cyan, title: tr("界面语言", "Interface Language"))
+                    PreferenceLabel(symbol: "globe", tone: .cyan, title: tr("语言", "Language"))
                 }
                 .pickerStyle(.menu)
             }
 
             Section(tr("默认归属", "Default Section")) {
                 DefaultSectionRow(
-                    title: tr("新应用", "New Applications"),
+                    title: tr("新应用", "New Apps"),
                     symbol: "app.badge",
                     tone: .blue,
                     section: Binding(get: { engine.unclassifiedSection },
@@ -69,7 +69,7 @@ struct GeneralSettingsView: View {
                     alwaysHiddenEnabled: engine.alwaysHiddenEnabled)
 
                 DefaultSectionRow(
-                    title: tr("新识别的系统图标", "New System Items"),
+                    title: tr("新系统图标", "New System Items"),
                     symbol: "menubar.rectangle",
                     tone: .teal,
                     section: Binding(get: { engine.newSystemItemSection },
@@ -77,7 +77,7 @@ struct GeneralSettingsView: View {
                     alwaysHiddenEnabled: engine.alwaysHiddenEnabled)
             }
 
-            Section(tr("快捷键", "Keyboard Shortcuts")) {
+            Section(tr("快捷键", "Shortcuts")) {
                 ForEach(HotkeyAction.allCases.filter {
                     $0 != .toggleAlwaysHidden || engine.alwaysHiddenEnabled
                 }) { action in
@@ -91,43 +91,43 @@ struct GeneralSettingsView: View {
                 }
             }
 
-            Section(tr("圆点手势", "Trigger Gestures")) {
-                GestureRow(symbol: "cursorarrow.click", title: tr("单击图标", "Single Click"),
-                           detail: tr("展开 / 收起可隐藏", "Toggle Hidden Section"))
+            Section(tr("触发手势", "Trigger Gestures")) {
+                GestureRow(symbol: "cursorarrow.click", title: tr("单击", "Click"),
+                           detail: tr("展开 / 收起可隐藏", "Toggle Hidden"))
                 if engine.alwaysHiddenEnabled {
-                    GestureRow(symbol: "cursorarrow.click.2", title: tr("双击图标", "Double Click"),
-                               detail: tr("展开 / 收起全部", "Toggle All Sections"))
+                    GestureRow(symbol: "cursorarrow.click.2", title: tr("双击", "Double-Click"),
+                               detail: tr("展开 / 收起全部", "Toggle All"))
                 }
-                GestureRow(symbol: "arrow.up.and.down.circle", title: tr("滚轮 / 触控板滑动", "Scroll / Trackpad Swipe"),
-                           detail: tr("下滑 / 左滑展开 · 上滑 / 右滑收起", "Swipe Down/Left to Reveal · Up/Right to Collapse"))
-                GestureRow(symbol: "computermouse", title: tr("右键图标", "Right Click"),
-                           detail: tr("打开速览面板", "Open Quick Panel"))
+                GestureRow(symbol: "arrow.up.and.down.circle", title: tr("滑动 / 滚轮", "Swipe / Scroll"),
+                           detail: tr("下滑展开 · 上滑收起", "Down: Reveal · Up: Collapse"))
+                GestureRow(symbol: "computermouse", title: tr("右键", "Right-Click"),
+                           detail: tr("速览面板", "Quick Panel"))
                 GestureRow(symbol: "arrow.left.and.right", title: tr("⌘ + 拖拽", "⌘ + Drag"),
-                           detail: tr("调整图标位置", "Move Menu Bar Trigger"))
+                           detail: tr("移动位置", "Reposition"))
             }
 
-            Section(tr("配置备份与迁移", "Configuration Backup")) {
+            Section(tr("配置备份", "Backup")) {
                 LabeledContent {
                     HStack(spacing: 8) {
                         if !engine.floatingBarOrder.isEmpty {
-                            Button(tr("重置图标排序", "Reset Icon Order")) {
+                            Button(tr("重置排序", "Reset Order")) {
                                 engine.resetFloatingBarOrder()
-                                profileNotice = tr("已恢复默认悬浮栏图标顺序", "Floating bar icon order reset")
+                                profileNotice = tr("已恢复默认排序", "Icon order reset")
                             }
                             .controlSize(.small)
                         }
-                        Button(tr("导入配置…", "Import…")) {
+                        Button(tr("导入…", "Import…")) {
                             importProfileFromDisk()
                         }
                         .controlSize(.small)
 
-                        Button(tr("导出配置…", "Export…")) {
+                        Button(tr("导出…", "Export…")) {
                             exportProfileToDisk()
                         }
                         .controlSize(.small)
                     }
                 } label: {
-                    PreferenceLabel(symbol: "externaldrive.badge.checkmark", tone: .mint, title: tr("分区与外观配置文件", "Sections & Appearance Profile"))
+                    PreferenceLabel(symbol: "externaldrive.badge.checkmark", tone: .mint, title: tr("配置文件", "Profile"))
                 }
 
                 if let profileNotice {

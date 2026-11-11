@@ -58,7 +58,7 @@ struct AboutSettingsView: View {
             PermissionRow(
                 symbol: engine.hasSystemLedger ? "checkmark.seal" : "list.bullet.rectangle",
                 tone: engine.hasSystemLedger ? .green : .neutral,
-                title: tr("完全磁盘访问（系统清单识别）", "Full Disk Access (System Ledger)"),
+                title: tr("完全磁盘访问", "Full Disk Access"),
                 status: engine.hasSystemLedger ? tr("已启用", "Enabled") : tr("可选", "Optional"),
                 action: engine.hasSystemLedger ? nil
                     : AboutAction(title: tr("打开设置", "Open Settings"), url: Self.fullDiskAccess))

@@ -51,8 +51,8 @@ enum RevealPresentationStyle: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .floatingBar: return tr("悬浮菜单栏", "Floating Bar")
-        case .inline:      return tr("菜单栏内展开", "Inline Menu Bar")
+        case .floatingBar: return tr("悬浮栏", "Floating Bar")
+        case .inline:      return tr("菜单栏内", "Inline")
         }
     }
 }
@@ -66,8 +66,8 @@ enum FloatingBarIconDisplayStyle: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .monochrome: return tr("菜单栏单色 (黑白)", "Monochrome Menu Bar")
-        case .appIcon:    return tr("应用彩色 (实物)", "Full-Color App Icon")
+        case .monochrome: return tr("黑白", "Monochrome")
+        case .appIcon:    return tr("实物", "App Icon")
         }
     }
 
@@ -90,10 +90,10 @@ enum StatusBarIconStyle: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .dot:     return tr("经典圆点", "Classic Dot")
-        case .eclipse: return tr("日蚀光环", "Eclipse Halo")
-        case .capsule: return tr("透镜胶囊", "Lens Capsule")
-        case .sparkle: return tr("棱镜星芒", "Prism Sparkle")
+        case .dot:     return tr("圆点", "Dot")
+        case .eclipse: return tr("光环", "Halo")
+        case .capsule: return tr("胶囊", "Capsule")
+        case .sparkle: return tr("星芒", "Sparkle")
         }
     }
 
@@ -169,9 +169,9 @@ enum HoverRevealDelay: Int, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .off:        return tr("关闭", "Off")
-        case .fast:       return tr("灵敏 (0.18 秒)", "Fast (0.18s)")
-        case .standard:   return tr("标准 (0.35 秒)", "Standard (0.35s)")
-        case .deliberate: return tr("防误触 (0.6 秒)", "Deliberate (0.6s)")
+        case .fast:       return tr("0.18 秒", "0.18s")
+        case .standard:   return tr("0.35 秒", "0.35s")
+        case .deliberate: return tr("0.6 秒", "0.6s")
         }
     }
 

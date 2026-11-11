@@ -101,10 +101,10 @@ struct GuideSettingsView: View {
             GuideStepRow(
                 step: "3",
                 tone: .purple,
-                title: tr("选择喜欢的展开方式与光学质感", "Customize Presentation & Liquid Glass"),
+                title: tr("选择展开方式与图标样式", "Choose Reveal & Icon Style"),
                 detail: tr(
-                    "在「外观」中可选择 Liquid Glass「悬浮菜单栏」（支持黑白单色或应用彩色实物图标）或传统的「菜单栏内展开」。",
-                    "In Appearance, choose between the second-row Liquid Glass Floating Bar (monochrome or full-color icons) and Inline Menu Bar expansion."
+                    "在「外观」中可切换「悬浮栏」（支持黑白或实物图标）与「菜单栏内」展开。",
+                    "In Appearance, switch between the Floating Bar (Monochrome or App Icon) and Inline expansion."
                 ),
                 actionTitle: tr("前往外观", "Open Appearance"),
                 action: { engine.requestedSettingsPane = .appearance }

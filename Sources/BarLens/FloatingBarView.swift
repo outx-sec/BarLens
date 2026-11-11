@@ -491,13 +491,13 @@ private struct FloatingBarGearButton: View {
                     let menu = NSMenu()
                     menu.autoenablesItems = false
                     menu.addItem(MenuActionItem(
-                        title: tr("临时切换为菜单栏内展开", "Switch to Inline Menu Bar"),
+                        title: tr("切换为菜单栏内展开", "Switch to Inline"),
                         symbol: "menubar.dock.rectangle",
                         actionBlock: onExpandInline
                     ))
                     menu.addItem(.separator())
 
-                    let iconHeader = NSMenuItem(title: tr("悬浮栏图标样式", "Floating Bar Icons"), action: nil, keyEquivalent: "")
+                    let iconHeader = NSMenuItem(title: tr("图标样式", "Icon Style"), action: nil, keyEquivalent: "")
                     iconHeader.isEnabled = false
                     menu.addItem(iconHeader)
                     for style in FloatingBarIconDisplayStyle.allCases {
@@ -509,7 +509,7 @@ private struct FloatingBarGearButton: View {
                     }
 
                     menu.addItem(.separator())
-                    let modeHeader = NSMenuItem(title: tr("外观模式", "Appearance Mode"), action: nil, keyEquivalent: "")
+                    let modeHeader = NSMenuItem(title: tr("外观", "Appearance"), action: nil, keyEquivalent: "")
                     modeHeader.isEnabled = false
                     menu.addItem(modeHeader)
                     for mode in AppearanceMode.allCases {
@@ -521,7 +521,7 @@ private struct FloatingBarGearButton: View {
                     }
 
                     menu.addItem(.separator())
-                    let langHeader = NSMenuItem(title: tr("界面语言", "Interface Language"), action: nil, keyEquivalent: "")
+                    let langHeader = NSMenuItem(title: tr("语言", "Language"), action: nil, keyEquivalent: "")
                     langHeader.isEnabled = false
                     menu.addItem(langHeader)
                     for lang in AppLanguage.allCases {
