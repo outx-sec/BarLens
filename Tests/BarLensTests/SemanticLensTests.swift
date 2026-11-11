@@ -49,6 +49,57 @@ final class SemanticLensTests: XCTestCase {
         XCTAssertNil(telemetry.unreadBadge)
         XCTAssertEqual(telemetry.shortChip, "Today: 180M tokens")
         XCTAssertEqual(telemetry.fullSummary, "Today: 180M tokens · ≈$152 · 1316 requests")
+        XCTAssertEqual(telemetry.rows, [
+            LensFactRow(
+                label: "Today",
+                value: "180M tokens",
+                detail: "12M in · 1.0M out · 167M cached",
+                tone: .accent
+            ),
+            LensFactRow(
+                label: nil,
+                value: "≈$152 · 1316 requests",
+                detail: nil,
+                tone: .accent
+            ),
+        ])
+    }
+
+    func testSplitsLongParentheticalAndDashBreakdownsWhileKeepingShortInline() {
+        let proxy = SemanticLensExtractor.extract(
+            appName: "TunnelBox",
+            bundleID: "com.example.tunnelbox",
+            items: [
+                RawAXItemTelemetry(
+                    help: """
+                    状态：已连接（香港 IEPL 01 · 延迟 18ms）
+                    流量: ↑ 1.2 GB — Direct 64% · Proxy 36%
+                    贴图: 0 [Default]
+                    """,
+                    menuEntries: [
+                        AXMenuSnapshotEntry(
+                            menuIndex: 0,
+                            title: "Hong Kong BGP 01 (18 ms · IPLC)",
+                            isEnabled: true,
+                            markChar: "✓"
+                        )
+                    ]
+                )
+            ]
+        )
+
+        XCTAssertEqual(proxy.shortChip, "状态：已连接")
+        XCTAssertEqual(proxy.rows, [
+            LensFactRow(label: "状态", value: "已连接", detail: "香港 IEPL 01 · 延迟 18ms", tone: .active),
+            LensFactRow(label: "流量", value: "↑ 1.2 GB", detail: "Direct 64% · Proxy 36%", tone: .accent),
+            LensFactRow(label: "贴图", value: "0 [Default]", detail: nil, tone: .accent),
+            LensFactRow(
+                label: proxy.rows.last?.label,
+                value: "Hong Kong BGP 01",
+                detail: "18 ms · IPLC",
+                tone: .active
+            ),
+        ])
     }
 
     func testExtractsUnreadNumericCounterFromTitle() {

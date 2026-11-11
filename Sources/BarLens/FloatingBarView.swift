@@ -390,13 +390,13 @@ final class FloatingBarController {
         let targetAppearance = engine.effectiveNSAppearance
         loupe.appearance = targetAppearance
 
-        // Exact symmetric panel width: 288pt card + 14pt left + 14pt right shadow padding = 316pt.
-        let nominalPanelWidth: CGFloat = 316
+        // Exact symmetric panel width: 304pt card + 14pt left + 14pt right shadow padding = 332pt.
+        let nominalPanelWidth: CGFloat = 332
         let minX = screen.visibleFrame.minX + 8
         let maxX = screen.visibleFrame.maxX - nominalPanelWidth - 8
         let desiredX = target.anchorScreenRect.midX - nominalPanelWidth / 2
         let clampedX = min(max(desiredX, minX), max(minX, maxX))
-        let pointerOffsetX = min(max(target.anchorScreenRect.midX - (clampedX + nominalPanelWidth / 2), -122), 122)
+        let pointerOffsetX = min(max(target.anchorScreenRect.midX - (clampedX + nominalPanelWidth / 2), -130), 130)
 
         let loupeView = FloatingLensLoupeView(
             item: resolvedItem,
@@ -490,8 +490,8 @@ final class FloatingBarController {
             subPanel.contentViewController = hosting
         }
 
-        // Exact symmetric panel width: 228pt card + 12pt left + 12pt right padding = 252pt.
-        let panelWidth: CGFloat = 252
+        // Exact symmetric panel width: 236pt card + 12pt left + 12pt right padding = 260pt.
+        let panelWidth: CGFloat = 260
         subPanel.contentView?.layoutSubtreeIfNeeded()
         let fitting = subPanel.contentViewController?.view.fittingSize ?? NSSize(width: panelWidth, height: 110)
         let height = max(68, fitting.height)
@@ -578,7 +578,7 @@ final class FloatingBarController {
     private func ensureLoupePanel() -> NSPanel {
         if let loupePanel { return loupePanel }
         let panel = FloatingBarPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 316, height: 150),
+            contentRect: NSRect(x: 0, y: 0, width: 332, height: 150),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -599,7 +599,7 @@ final class FloatingBarController {
     private func ensureSubmenuPanel() -> NSPanel {
         if let submenuPanel { return submenuPanel }
         let panel = FloatingBarPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 252, height: 120),
+            contentRect: NSRect(x: 0, y: 0, width: 260, height: 120),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -1149,7 +1149,7 @@ private struct FloatingLensLoupeView: View {
         }
         .padding(.horizontal, 13)
         .padding(.vertical, 11)
-        .frame(width: 288)
+        .frame(width: 304)
         .settingsGlass(cornerRadius: 18)
         .overlay(alignment: .top) {
             // Palindromic 5-stop optical connector beam centered to the sub-pixel beneath the hovered icon.
@@ -1166,11 +1166,11 @@ private struct FloatingLensLoupeView: View {
                 .shadow(color: .black.opacity(colorScheme == .dark ? 0.18 : 0.06), radius: 2.5, y: 1)
         }
         // Top 8pt padding acts as a seamless hover bridge right below the Floating Bar capsule;
-        // symmetric 14pt left & right padding keeps the 288pt card dead-center inside the 316pt panel.
+        // symmetric 14pt left & right padding keeps the 304pt card dead-center inside the 332pt panel.
         .padding(.top, 8)
         .padding(.horizontal, 14)
         .padding(.bottom, 16)
-        .frame(width: 316)
+        .frame(width: 332)
         .contentShape(Rectangle())
         .environment(\.colorScheme, colorScheme)
         .preferredColorScheme(colorScheme)
@@ -1214,11 +1214,15 @@ private struct FloatingLensLoupeView: View {
                 .font(.system(size: 12.5, weight: .semibold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
+                .truncationMode(.tail)
 
             if let unread = item.telemetry.unreadBadge {
                 Text(tr("未读 \(unread)", "\(unread) Unread"))
                     .font(.system(size: 10, weight: .bold, design: .rounded))
                     .monospacedDigit()
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
                     .foregroundStyle(.white)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 1.5)
@@ -1226,6 +1230,9 @@ private struct FloatingLensLoupeView: View {
             } else if item.isSpatialOverflow {
                 Text(tr("容量暂收", "Tucked"))
                     .font(.system(size: 9.5, weight: .semibold))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
                     .foregroundStyle(BarLensPalette.ink(.teal, in: colorScheme))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 1.5)
@@ -1239,6 +1246,9 @@ private struct FloatingLensLoupeView: View {
                 Text(vitals.compactSummary)
                     .font(.system(size: 10.5, weight: .medium, design: .rounded))
                     .monospacedDigit()
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
                     .foregroundStyle(
                         warn
                             ? BarLensPalette.ink(.orange, in: colorScheme)
@@ -1258,6 +1268,8 @@ private struct FloatingLensLoupeView: View {
                     .monospacedDigit()
                     .foregroundStyle(BarLensPalette.ink(.cyan, in: colorScheme))
                     .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: 132, alignment: .trailing)
             }
         }
     }
@@ -1289,40 +1301,51 @@ private struct FloatingLensLoupeView: View {
 
     // MARK: Structured Fact Rows
 
-    private func factRowsSection(_ rows: [LensFactRow]) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            ForEach(rows) { row in
-                if let label = row.label, !label.isEmpty {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(label)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.primary.opacity(0.66))
-                            .lineLimit(1)
-                        Spacer(minLength: 6)
-                        Text(row.value)
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(inkColor(for: row.tone))
-                            .multilineTextAlignment(.trailing)
-                            .lineLimit(2)
-                    }
-                } else {
-                    HStack(alignment: .top, spacing: 6) {
-                        Circle()
-                            .fill(inkColor(for: row.tone))
-                            .frame(width: 5, height: 5)
-                            .padding(.top, 5)
-                        Text(row.value)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(row.tone == .neutral ? .primary.opacity(0.84) : inkColor(for: row.tone))
-                            .fixedSize(horizontal: false, vertical: true)
-                            .lineLimit(3)
-                        Spacer(minLength: 0)
-                    }
-                }
+    private func shouldStackFactRow(_ row: LensFactRow) -> Bool {
+        guard let label = row.label, !label.isEmpty, row.detail == nil else {
+            return false
+        }
+        let valUnits = row.value.estimatedVisualUnits
+        if valUnits > 26 {
+            return true
+        }
+        return valUnits > 20 && (label.estimatedVisualUnits + valUnits > 38)
+    }
+
+    private func splitMiddleDotPair(_ text: String) -> (left: String, right: String)? {
+        for sep in [" · ", " • "] {
+            let parts = text.components(separatedBy: sep)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+            if parts.count == 2,
+               !parts[0].isEmpty,
+               !parts[1].isEmpty,
+               parts[0].estimatedVisualUnits + parts[1].estimatedVisualUnits <= 38 {
+                return (parts[0], parts[1])
             }
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 7)
+        return nil
+    }
+
+    private func factRowsSection(_ rows: [LensFactRow]) -> some View {
+        let hasLabelledRows = rows.contains { ($0.label?.isEmpty == false) }
+        let showDividers = rows.count > 1 && (
+            rows.contains { $0.detail != nil }
+                || (hasLabelledRows && rows.contains { $0.label == nil })
+                || rows.contains { shouldStackFactRow($0) }
+        )
+
+        return VStack(alignment: .leading, spacing: showDividers ? 6 : 5) {
+            ForEach(Array(rows.enumerated()), id: \.element.id) { idx, row in
+                if idx > 0 && showDividers {
+                    Rectangle()
+                        .fill(Color.primary.opacity(colorScheme == .dark ? 0.08 : 0.055))
+                        .frame(height: 0.6)
+                }
+                factRowView(row, hasLabelledSiblings: hasLabelledRows)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7.5)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(colorScheme == .dark ? Color.white.opacity(0.055) : Color.black.opacity(0.038))
@@ -1333,6 +1356,122 @@ private struct FloatingLensLoupeView: View {
                     colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.05),
                     lineWidth: 0.65
                 )
+        }
+    }
+
+    @ViewBuilder
+    private func factRowView(_ row: LensFactRow, hasLabelledSiblings: Bool) -> some View {
+        if let label = row.label, !label.isEmpty {
+            if shouldStackFactRow(row) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(label)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.primary.opacity(0.58))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Text(row.value)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(inkColor(for: row.tone))
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 2.5) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(label)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.primary.opacity(0.66))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Spacer(minLength: 8)
+                        Text(row.value)
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(inkColor(for: row.tone))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .layoutPriority(1)
+                    }
+                    if let detail = row.detail, !detail.isEmpty {
+                        Text(detail)
+                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(.primary.opacity(0.56))
+                            .multilineTextAlignment(.leading)
+                            .lineLimit(2)
+                            .truncationMode(.tail)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        } else if hasLabelledSiblings {
+            if row.detail == nil, let pair = splitMiddleDotPair(row.value) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(pair.left)
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(inkColor(for: row.tone))
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                    Spacer(minLength: 8)
+                    Text(pair.right)
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.primary.opacity(0.68))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 2.5) {
+                    Text(row.value)
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(row.tone == .neutral ? .primary.opacity(0.84) : inkColor(for: row.tone))
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let detail = row.detail, !detail.isEmpty {
+                        Text(detail)
+                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(.primary.opacity(0.56))
+                            .multilineTextAlignment(.leading)
+                            .lineLimit(2)
+                            .truncationMode(.tail)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        } else {
+            HStack(alignment: .top, spacing: 6) {
+                Circle()
+                    .fill(inkColor(for: row.tone))
+                    .frame(width: 5, height: 5)
+                    .padding(.top, 5)
+                VStack(alignment: .leading, spacing: 2.5) {
+                    Text(row.value)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(row.tone == .neutral ? .primary.opacity(0.84) : inkColor(for: row.tone))
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let detail = row.detail, !detail.isEmpty {
+                        Text(detail)
+                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(.primary.opacity(0.56))
+                            .multilineTextAlignment(.leading)
+                            .lineLimit(2)
+                            .truncationMode(.tail)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
         }
     }
 
@@ -1471,6 +1610,7 @@ private struct FloatingLensLoupeView: View {
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.primary.opacity(0.88))
                             .lineLimit(1)
+                            .truncationMode(.tail)
                     }
                 }
                 HStack(spacing: 8) {
@@ -1599,6 +1739,7 @@ private struct FloatingLensSubmenuFlyoutView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.primary.opacity(0.78))
                     .lineLimit(1)
+                    .truncationMode(.tail)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 4)
@@ -1618,7 +1759,7 @@ private struct FloatingLensSubmenuFlyoutView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
-        .frame(width: 228)
+        .frame(width: 236)
         .settingsGlass(cornerRadius: 15)
         .background {
             RoundedRectangle(cornerRadius: 15, style: .continuous)
@@ -1630,7 +1771,7 @@ private struct FloatingLensSubmenuFlyoutView: View {
         .padding(.top, 8)
         .padding(.horizontal, 12)
         .padding(.bottom, 14)
-        .frame(width: 252)
+        .frame(width: 260)
         .contentShape(Rectangle())
         .environment(\.colorScheme, colorScheme)
         .preferredColorScheme(colorScheme)
@@ -1648,14 +1789,18 @@ private struct FloatingLensSubmenuFlyoutView: View {
         VStack(alignment: .leading, spacing: 3.5) {
             ForEach(children) { child in
                 if !child.isEnabled && !child.hasSubmenu {
-                    HStack(spacing: 6) {
+                    HStack(alignment: .top, spacing: 6) {
                         Circle()
                             .fill(Color.primary.opacity(0.28))
                             .frame(width: 4.5, height: 4.5)
+                            .padding(.top, 5)
                         Text(child.title)
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.primary.opacity(0.56))
+                            .multilineTextAlignment(.leading)
                             .lineLimit(2)
+                            .truncationMode(.tail)
+                            .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 0)
                     }
                     .padding(.horizontal, 8)
@@ -1696,6 +1841,10 @@ private struct FloatingLensSubmenuFlyoutView: View {
                                     Text(leaf.title)
                                         .font(.system(size: 10.5, weight: .medium))
                                         .foregroundStyle(.primary.opacity(0.52))
+                                        .multilineTextAlignment(.leading)
+                                        .lineLimit(2)
+                                        .truncationMode(.tail)
+                                        .fixedSize(horizontal: false, vertical: true)
                                         .padding(.horizontal, 8)
                                         .padding(.vertical, 3)
                                 } else {
@@ -1876,6 +2025,7 @@ private struct LoupeActionRowButton: View {
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(.primary.opacity(0.92))
                 .lineLimit(1)
+                .truncationMode(.tail)
 
             Spacer(minLength: 4)
 
@@ -1883,6 +2033,9 @@ private struct LoupeActionRowButton: View {
                 Text(trailing)
                     .font(.system(size: 10, weight: .medium, design: .rounded))
                     .foregroundStyle(.primary.opacity(0.55))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
             }
             if showsSubmenuChevron {
                 Image(systemName: "chevron.right")
@@ -1986,7 +2139,9 @@ private struct LoupeUtilityButton: View {
                 .font(.system(size: 10.5, weight: .semibold))
             Text(label)
                 .font(.system(size: 11, weight: .medium))
+                .lineLimit(1)
         }
+        .fixedSize(horizontal: true, vertical: false)
         .foregroundStyle(fg)
         .padding(.horizontal, 7.5)
         .padding(.vertical, 4)

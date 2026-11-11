@@ -94,14 +94,19 @@ struct LensFactRow: Equatable, Hashable, Identifiable {
         case warning
     }
 
-    var id: String { "\(label ?? "_")::\(value)" }
+    var id: String { "\(label ?? "_")::\(value)::\(detail ?? "")" }
     let label: String?
     let value: String
+    let detail: String?
     let tone: ValueTone
 
-    init(label: String? = nil, value: String, tone: ValueTone = .neutral) {
+    init(label: String? = nil,
+         value: String,
+         detail: String? = nil,
+         tone: ValueTone = .neutral) {
         self.label = label
         self.value = value
+        self.detail = detail
         self.tone = tone
     }
 }
@@ -333,9 +338,11 @@ enum SemanticLensExtractor {
                 if isChecked, rows.count < 5 {
                     let norm = normalizeKey(title)
                     if seenNormalized.insert(norm).inserted {
+                        let (primaryTitle, detailTitle) = splitTrailingDetail(title)
                         rows.append(LensFactRow(
                             label: tr("当前选项", "Active"),
-                            value: title,
+                            value: primaryTitle,
+                            detail: detailTitle,
                             tone: .active
                         ))
                         clauses.append(title)
@@ -528,19 +535,84 @@ enum SemanticLensExtractor {
             if rawVal.lowercased().hasSuffix(".yaml") || rawVal.lowercased().hasSuffix(".yml") {
                 rawVal = String(rawVal.dropLast(rawVal.lowercased().hasSuffix(".yaml") ? 5 : 4))
             }
-            if !rawKey.isEmpty, !rawVal.isEmpty, rawKey.count <= 18 {
+            if !rawKey.isEmpty, !rawVal.isEmpty, rawKey.count <= 18, rawKey.estimatedVisualUnits <= 22 {
+                let (primaryVal, detailVal) = splitTrailingDetail(rawVal)
                 return LensFactRow(
                     label: rawKey,
-                    value: rawVal,
+                    value: primaryVal,
+                    detail: detailVal,
                     tone: preferredTone ?? inferTone(forValue: rawVal)
                 )
             }
         }
+        let (primaryClause, detailClause) = splitTrailingDetail(clause)
         return LensFactRow(
             label: nil,
-            value: clause,
+            value: primaryClause,
+            detail: detailClause,
             tone: preferredTone ?? inferTone(forValue: clause)
         )
+    }
+
+    /// Separates a primary metric/state from a long trailing parenthetical or pipe/dash breakdown
+    /// (e.g. `"274M tokens (16M in · 1.7M out · 256M cached)"` -> `("274M tokens", "16M in · 1.7M out · 256M cached")`)
+    /// so primary values stay crisp on a single line while breakdowns render cleanly underneath.
+    private static func splitTrailingDetail(_ text: String) -> (primary: String, detail: String?) {
+        let trimmed = collapseWhitespace(text)
+        guard trimmed.estimatedVisualUnits > 20 else {
+            return (trimmed, nil)
+        }
+
+        let bracketPairs: [(open: Character, close: Character)] = [
+            ("(", ")"),
+            ("（", "）"),
+            ("[", "]"),
+        ]
+        for pair in bracketPairs where trimmed.last == pair.close {
+            var depth = 0
+            var openIdx: String.Index?
+            var cursor = trimmed.endIndex
+            while cursor > trimmed.startIndex {
+                cursor = trimmed.index(before: cursor)
+                let ch = trimmed[cursor]
+                if ch == pair.close {
+                    depth += 1
+                } else if ch == pair.open {
+                    depth -= 1
+                    if depth == 0 {
+                        openIdx = cursor
+                        break
+                    }
+                }
+            }
+            if let openIdx, openIdx > trimmed.startIndex {
+                let primary = String(trimmed[..<openIdx]).trimmingCharacters(in: .whitespaces)
+                let innerStart = trimmed.index(after: openIdx)
+                let innerEnd = trimmed.index(before: trimmed.endIndex)
+                if innerStart < innerEnd {
+                    let detail = String(trimmed[innerStart..<innerEnd]).trimmingCharacters(in: .whitespaces)
+                    if primary.estimatedVisualUnits >= 2 && detail.estimatedVisualUnits >= 6 {
+                        return (primary, detail)
+                    }
+                }
+            }
+        }
+
+        if trimmed.estimatedVisualUnits > 24 {
+            for sep in [" — ", " | "] {
+                if let range = trimmed.range(of: sep) {
+                    let primary = String(trimmed[..<range.lowerBound]).trimmingCharacters(in: .whitespaces)
+                    let detail = String(trimmed[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+                    if primary.estimatedVisualUnits >= 2,
+                       primary.estimatedVisualUnits <= 20,
+                       detail.estimatedVisualUnits >= 6 {
+                        return (primary, detail)
+                    }
+                }
+            }
+        }
+
+        return (trimmed, nil)
     }
 
     private static func findKeyValueSeparator(in text: String) -> String.Index? {
@@ -733,20 +805,23 @@ enum SemanticLensExtractor {
 
     private static func compactClauseForChip(_ clause: String) -> String {
         var result = clause
-        if let openIdx = result.firstIndex(of: "("),
-           let closeIdx = result.lastIndex(of: ")"),
-           openIdx < closeIdx,
-           result.distance(from: openIdx, to: closeIdx) > 8 {
-            let prefix = result[..<openIdx].trimmingCharacters(in: .whitespaces)
-            if prefix.count >= 4 {
-                result = prefix
+        for (openCh, closeCh) in [("(", ")"), ("（", "）")] as [(Character, Character)] {
+            if let openIdx = result.firstIndex(of: openCh),
+               let closeIdx = result.lastIndex(of: closeCh),
+               openIdx < closeIdx,
+               String(result[openIdx...closeIdx]).estimatedVisualUnits > 8 {
+                let prefix = result[..<openIdx].trimmingCharacters(in: .whitespaces)
+                if prefix.estimatedVisualUnits >= 4 {
+                    result = prefix
+                    break
+                }
             }
         }
         return collapseWhitespace(result)
     }
 
     private static func compactLongParenthetical(_ clause: String) -> String {
-        if clause.count <= 36 { return clause }
+        if clause.estimatedVisualUnits <= 36 { return clause }
         return compactClauseForChip(clause)
     }
 
@@ -754,6 +829,15 @@ enum SemanticLensExtractor {
         guard text.count > maxCount, maxCount > 2 else { return text }
         let idx = text.index(text.startIndex, offsetBy: maxCount - 1)
         return String(text[..<idx]).trimmingCharacters(in: .whitespaces) + "…"
+    }
+}
+
+extension String {
+    /// Approximate visual character-cell width where CJK / full-width / emoji scalars count as 2 units and ASCII/Latin as 1.
+    var estimatedVisualUnits: Int {
+        unicodeScalars.reduce(0) { acc, scalar in
+            acc + (scalar.value >= 0x2E80 ? 2 : 1)
+        }
     }
 }
 
