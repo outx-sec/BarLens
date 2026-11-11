@@ -41,10 +41,10 @@ Traditional macOS menu bar managers work by inserting an ultra-wide invisible `N
 
 ## 🔮 Highlights
 
-### 1. Second-Row Liquid Glass Optical Capsule & Semantic Lens HUD
-Click the **Eclipse Halo** trigger in your menu bar to unfurl hidden items in a floating **Liquid Glass** capsule nestled `4pt` beneath the top menu bar:
+### 1. Second-Row Liquid Glass Optical Capsule & Loupe
+Click the **Eclipse Halo** trigger in your menu bar to unfurl hidden items in a pure single-piece **Liquid Glass** capsule nestled `4pt` beneath the top menu bar:
 - **4-Layer Optical Rim (`LiquidGlassRim`)**: Outer depth contour, inner cushion vignette, 135° Fresnel specular highlight, and top caustic sheen.
-- **Zero-Capture Semantic Lens (`透镜状态透视`)**: Without requesting Screen Recording permission, BarLens distills live Accessibility attributes (`AXTitle`, `AXDescription`, `AXValue`, and multiline `AXHelp` tooltips) plus native `IOKit` / `CoreAudio` / `Carbon` telemetry into unread badges, live status dots, and a zero-shift optical readout bar right beneath the floating capsule.
+- **Zero-Capture Optical Lens Loupe & Action Tunneling (`光学透视浮窗与子菜单直达`)**: Pure icon capsule at rest; hover any icon to bloom an icon-anchored Liquid Glass loupe showing unread counts (Status Item + Dock badge fusion), live process memory/CPU vitals (`proc_pid_rusage`), untruncated telemetry rows, interactive system controls (volume slider, audio output switcher, input source switcher, local IP copy, wireless HID battery levels), and **1-click `AXMenu` submenu action tunneling**—all with zero Screen Recording permission.
 - **Click-to-Open & Click-to-Collapse**: Click any third-party app or system icon inside the floating bar to invoke its native macOS menu in-place; click again (or click outside) to collapse smoothly.
 - **Drag-and-Drop Icon Reordering**: Drag icons directly inside the floating bar (or use right-click `Move to Front` / `Move to End`) to arrange your hidden items in any custom order.
 - **3 Built-In Optical Presets**: Switch effortlessly between **Crystal Lens** (default), **Obsidian Glass**, and **Prism Sheen**, or fine-tune **Glass Density** (`8%–75%`) and **Refractive Rim Intensity** (`40%–150%`) with a live interactive preview stage.
@@ -126,7 +126,7 @@ While a visibility restriction is active, `MenuBarAgent` filters allowed items s
 `./build.sh` automatically uses a local `BarLens Dev` certificate if present, or **falls back to ad-hoc signing (`--sign -`)** with a warning so `git clone && ./build.sh` works immediately:
 
 ```bash
-# Run the test suite (64 unit tests)
+# Run the test suite (66 unit tests)
 swift test
 
 # Build and install to /Applications/BarLens.app
