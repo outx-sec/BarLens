@@ -6,24 +6,45 @@ import SwiftUI
 /// allowing the capsule's top shadow padding to overlap the menu bar bottom edge
 /// so the capsule itself sits snugly 4pt below the menu bar.
 private final class FloatingBarPanel: NSPanel {
+    var allowsKeyFocus = false
+
+    override var canBecomeKey: Bool {
+        allowsKeyFocus
+    }
+
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
         frameRect
     }
 }
 
-/// Coordinates hover dwell, icon-anchored geometry, and mouse-bridge continuity
-/// between icons in the Floating Bar and the companion Liquid Glass Optical Loupe panel.
+/// Coordinates hover dwell, icon-anchored geometry, cascading secondary submenus,
+/// and mouse-bridge continuity between the Floating Bar, Optical Loupe, and Submenu Flyout.
 final class LensLoupeCoordinator: ObservableObject {
     struct ActiveTarget: Equatable {
         let itemID: String
         let anchorScreenRect: NSRect
     }
 
+    struct ActiveSubmenu: Equatable {
+        let parentItemID: String
+        let bundleID: String
+        let action: LensTunnelAction
+        let anchorRowScreenRect: NSRect
+    }
+
     @Published private(set) var activeTarget: ActiveTarget?
+    @Published private(set) var activeSubmenu: ActiveSubmenu?
     private var pendingShowWork: DispatchWorkItem?
     private var pendingHideWork: DispatchWorkItem?
+    private var pendingSubmenuHideWork: DispatchWorkItem?
     private var hoveredIconID: String?
+    private var hoveredSubmenuActionID: String?
     private var isPointerInsideLoupe = false
+    private var isPointerInsideSubmenu = false
+
+    var isAnyOverlayHovered: Bool {
+        isPointerInsideLoupe || isPointerInsideSubmenu
+    }
 
     func iconHoverChanged(itemID: String, isHovering: Bool, screenRect: NSRect?, lensEnabled: Bool) {
         guard lensEnabled else {
@@ -37,8 +58,10 @@ final class LensLoupeCoordinator: ObservableObject {
             pendingShowWork?.cancel()
             pendingShowWork = nil
 
-            if activeTarget != nil {
-                // Already open: glide immediately to the newly hovered sibling icon.
+            if let current = activeTarget {
+                if current.itemID != itemID {
+                    clearSubmenuImmediately()
+                }
                 activeTarget = ActiveTarget(itemID: itemID, anchorScreenRect: screenRect)
             } else {
                 let work = DispatchWorkItem { [weak self] in
@@ -60,12 +83,65 @@ final class LensLoupeCoordinator: ObservableObject {
 
     func loupeHoverChanged(_ hovering: Bool, onEngineUpdate: (Bool) -> Void) {
         isPointerInsideLoupe = hovering
-        onEngineUpdate(hovering)
+        onEngineUpdate(isAnyOverlayHovered)
         if hovering {
             pendingHideWork?.cancel()
             pendingHideWork = nil
         } else {
+            scheduleSubmenuDismissIfIdle()
             scheduleDismissIfIdle()
+        }
+    }
+
+    func submenuParentRowHoverChanged(parentItemID: String,
+                                      bundleID: String,
+                                      action: LensTunnelAction,
+                                      isHovering: Bool,
+                                      rowScreenRect: NSRect?) {
+        if isHovering, action.hasSubmenu, let rowScreenRect {
+            hoveredSubmenuActionID = action.id
+            pendingSubmenuHideWork?.cancel()
+            pendingSubmenuHideWork = nil
+            activeSubmenu = ActiveSubmenu(
+                parentItemID: parentItemID,
+                bundleID: bundleID,
+                action: action,
+                anchorRowScreenRect: rowScreenRect
+            )
+        } else {
+            if hoveredSubmenuActionID == action.id {
+                hoveredSubmenuActionID = nil
+            }
+            scheduleSubmenuDismissIfIdle()
+        }
+    }
+
+    func nonSubmenuRowHovered() {
+        hoveredSubmenuActionID = nil
+        scheduleSubmenuDismissIfIdle()
+    }
+
+    func submenuFlyoutHoverChanged(_ hovering: Bool, onEngineUpdate: (Bool) -> Void) {
+        isPointerInsideSubmenu = hovering
+        onEngineUpdate(isAnyOverlayHovered)
+        if hovering {
+            pendingHideWork?.cancel()
+            pendingHideWork = nil
+            pendingSubmenuHideWork?.cancel()
+            pendingSubmenuHideWork = nil
+        } else {
+            scheduleSubmenuDismissIfIdle()
+            scheduleDismissIfIdle()
+        }
+    }
+
+    func clearSubmenuImmediately() {
+        pendingSubmenuHideWork?.cancel()
+        pendingSubmenuHideWork = nil
+        hoveredSubmenuActionID = nil
+        isPointerInsideSubmenu = false
+        if activeSubmenu != nil {
+            activeSubmenu = nil
         }
     }
 
@@ -74,6 +150,7 @@ final class LensLoupeCoordinator: ObservableObject {
         pendingShowWork = nil
         pendingHideWork?.cancel()
         pendingHideWork = nil
+        clearSubmenuImmediately()
         hoveredIconID = nil
         isPointerInsideLoupe = false
         if activeTarget != nil {
@@ -81,11 +158,25 @@ final class LensLoupeCoordinator: ObservableObject {
         }
     }
 
+    private func scheduleSubmenuDismissIfIdle() {
+        pendingSubmenuHideWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            guard self.hoveredSubmenuActionID == nil && !self.isPointerInsideSubmenu else { return }
+            self.activeSubmenu = nil
+        }
+        pendingSubmenuHideWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.13, execute: work)
+    }
+
     private func scheduleDismissIfIdle() {
         pendingHideWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            guard self.hoveredIconID == nil && !self.isPointerInsideLoupe else { return }
+            guard self.hoveredIconID == nil
+                && !self.isPointerInsideLoupe
+                && !self.isPointerInsideSubmenu else { return }
+            self.clearSubmenuImmediately()
             self.activeTarget = nil
         }
         pendingHideWork = work
@@ -93,7 +184,8 @@ final class LensLoupeCoordinator: ObservableObject {
     }
 }
 
-/// Manages the horizontal Liquid Glass floating menu bar and its companion Optical Loupe panel.
+/// Manages the horizontal Liquid Glass floating menu bar, its companion Optical Loupe panel,
+/// and its cascading secondary Submenu Flyout panel.
 final class FloatingBarController {
     private let engine: DividerEngine
     private let catalog: Catalog
@@ -101,6 +193,7 @@ final class FloatingBarController {
     private let loupeCoordinator = LensLoupeCoordinator()
     private var panel: NSPanel?
     private var loupePanel: NSPanel?
+    private var submenuPanel: NSPanel?
     private weak var anchorButton: NSStatusBarButton?
     private var cancellables: Set<AnyCancellable> = []
     private var globalClickMonitor: Any?
@@ -119,6 +212,7 @@ final class FloatingBarController {
                 DispatchQueue.main.async {
                     self.layoutAndPositionPanel()
                     self.syncLoupePanel(animated: false)
+                    self.syncSubmenuPanel(animated: false)
                 }
             }
             .store(in: &cancellables)
@@ -137,6 +231,7 @@ final class FloatingBarController {
             DispatchQueue.main.async {
                 self.layoutAndPositionPanel()
                 self.syncLoupePanel(animated: false)
+                self.syncSubmenuPanel(animated: false)
             }
         }
         .store(in: &cancellables)
@@ -153,6 +248,19 @@ final class FloatingBarController {
                 }
             }
             .store(in: &cancellables)
+
+        loupeCoordinator.$activeSubmenu
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] sub in
+                guard let self else { return }
+                if sub == nil || !self.isShown || self.loupePanel?.isVisible != true {
+                    self.hideSubmenuPanel()
+                } else {
+                    self.syncSubmenuPanel(animated: self.submenuPanel?.isVisible == true)
+                }
+            }
+            .store(in: &cancellables)
     }
 
     var isShown: Bool {
@@ -161,10 +269,14 @@ final class FloatingBarController {
 
     var panelScreenFrame: NSRect? {
         guard isShown, let panel else { return nil }
+        var combined = panel.frame
         if let loupePanel, loupePanel.isVisible {
-            return panel.frame.union(loupePanel.frame)
+            combined = combined.union(loupePanel.frame)
         }
-        return panel.frame
+        if let submenuPanel, submenuPanel.isVisible {
+            combined = combined.union(submenuPanel.frame)
+        }
+        return combined
     }
 
     func update(relativeTo button: NSStatusBarButton?) {
@@ -184,6 +296,7 @@ final class FloatingBarController {
         let targetAppearance = engine.effectiveNSAppearance
         panel.appearance = targetAppearance
         loupePanel?.appearance = targetAppearance
+        submenuPanel?.appearance = targetAppearance
         let maxBarWidth = max(260, screen.visibleFrame.width - 32)
         let rootView = FloatingBarView(
             engine: engine,
@@ -222,6 +335,7 @@ final class FloatingBarController {
             installMonitors(statusButtonWindow: buttonWindow)
         } else {
             syncLoupePanel(animated: false)
+            syncSubmenuPanel(animated: false)
         }
     }
 
@@ -276,13 +390,13 @@ final class FloatingBarController {
         let targetAppearance = engine.effectiveNSAppearance
         loupe.appearance = targetAppearance
 
-        // Precompute horizontal clamping using the fixed card width (288pt + 28pt shadow/padding = 316pt).
+        // Exact symmetric panel width: 288pt card + 14pt left + 14pt right shadow padding = 316pt.
         let nominalPanelWidth: CGFloat = 316
         let minX = screen.visibleFrame.minX + 8
         let maxX = screen.visibleFrame.maxX - nominalPanelWidth - 8
         let desiredX = target.anchorScreenRect.midX - nominalPanelWidth / 2
         let clampedX = min(max(desiredX, minX), max(minX, maxX))
-        let pointerOffsetX = min(max(target.anchorScreenRect.midX - (clampedX + nominalPanelWidth / 2), -108), 108)
+        let pointerOffsetX = min(max(target.anchorScreenRect.midX - (clampedX + nominalPanelWidth / 2), -122), 122)
 
         let loupeView = FloatingLensLoupeView(
             item: resolvedItem,
@@ -305,7 +419,7 @@ final class FloatingBarController {
 
         loupe.contentView?.layoutSubtreeIfNeeded()
         let fitting = loupe.contentViewController?.view.fittingSize ?? NSSize(width: nominalPanelWidth, height: 140)
-        let width = max(nominalPanelWidth, fitting.width)
+        let width = nominalPanelWidth
         let height = max(84, fitting.height)
 
         // Main capsule has 18pt bottom shadow padding; overlapping by 14pt places the Loupe card
@@ -335,7 +449,98 @@ final class FloatingBarController {
         }
     }
 
+    private func syncSubmenuPanel(animated: Bool) {
+        guard isShown,
+              engine.lensTelemetryEnabled,
+              let loupe = loupePanel,
+              loupe.isVisible,
+              let activeSub = loupeCoordinator.activeSubmenu,
+              activeSub.action.hasSubmenu else {
+            hideSubmenuPanel()
+            return
+        }
+
+        let screen = loupe.screen
+            ?? NSScreen.screens.first(where: { $0.frame.intersects(loupe.frame) })
+            ?? NSScreen.main
+        guard let screen else {
+            hideSubmenuPanel()
+            return
+        }
+
+        let subPanel = ensureSubmenuPanel()
+        let targetAppearance = engine.effectiveNSAppearance
+        subPanel.appearance = targetAppearance
+
+        let flyoutView = FloatingLensSubmenuFlyoutView(
+            submenu: activeSub,
+            engine: engine,
+            coordinator: loupeCoordinator
+        )
+
+        if let hosting = subPanel.contentViewController as? NSHostingController<FloatingLensSubmenuFlyoutView> {
+            hosting.rootView = flyoutView
+            hosting.view.appearance = targetAppearance
+        } else {
+            let hosting = NSHostingController(rootView: flyoutView)
+            hosting.sizingOptions = [.intrinsicContentSize]
+            hosting.view.wantsLayer = true
+            hosting.view.layer?.backgroundColor = NSColor.clear.cgColor
+            hosting.view.appearance = targetAppearance
+            subPanel.contentViewController = hosting
+        }
+
+        // Exact symmetric panel width: 228pt card + 12pt left + 12pt right padding = 252pt.
+        let panelWidth: CGFloat = 252
+        subPanel.contentView?.layoutSubtreeIfNeeded()
+        let fitting = subPanel.contentViewController?.view.fittingSize ?? NSSize(width: panelWidth, height: 110)
+        let height = max(68, fitting.height)
+
+        // Loupe has 14pt horizontal shadow padding; Submenu has 12pt horizontal shadow padding.
+        // Overlapping transparent paddings by 22pt places the cards 4pt apart visually while
+        // maintaining a continuous 100% gapless mouse-hover bridge between the two panels!
+        let rightSideX = loupe.frame.maxX - 22
+        let leftSideX = loupe.frame.minX + 22 - panelWidth
+        let resolvedX: CGFloat
+        if rightSideX + panelWidth <= screen.visibleFrame.maxX - 4 {
+            resolvedX = rightSideX
+        } else {
+            resolvedX = max(screen.visibleFrame.minX + 4, leftSideX)
+        }
+
+        // Align top of submenu card with the hovered parent row's top edge (+8pt top padding + 4pt card inset).
+        let desiredTopY = activeSub.anchorRowScreenRect.maxY + 12
+        let minY = screen.visibleFrame.minY + 8
+        let resolvedY = max(minY, desiredTopY - height)
+        let targetFrame = NSRect(x: resolvedX, y: resolvedY, width: panelWidth, height: height)
+
+        if animated && subPanel.isVisible {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.12
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                subPanel.animator().setFrame(targetFrame, display: true)
+            }
+        } else {
+            subPanel.setFrame(targetFrame, display: true)
+            if !subPanel.isVisible {
+                subPanel.alphaValue = 0
+                subPanel.orderFrontRegardless()
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.11
+                    context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                    subPanel.animator().alphaValue = 1
+                }
+            }
+        }
+    }
+
+    private func hideSubmenuPanel() {
+        guard let submenuPanel, submenuPanel.isVisible else { return }
+        submenuPanel.orderOut(nil)
+    }
+
     private func hideLoupePanel() {
+        hideSubmenuPanel()
         engine.isLensLoupeHovered = false
         guard let loupePanel, loupePanel.isVisible else { return }
         loupePanel.orderOut(nil)
@@ -346,6 +551,7 @@ final class FloatingBarController {
         loupeCoordinator.dismissImmediately()
         engine.isFloatingBarHovered = false
         engine.isLensLoupeHovered = false
+        submenuPanel?.orderOut(nil)
         loupePanel?.orderOut(nil)
         panel?.orderOut(nil)
     }
@@ -377,6 +583,8 @@ final class FloatingBarController {
             backing: .buffered,
             defer: false
         )
+        panel.allowsKeyFocus = true
+        panel.becomesKeyOnlyIfNeeded = false
         panel.level = .statusBar
         panel.isFloatingPanel = true
         panel.isOpaque = false
@@ -385,6 +593,27 @@ final class FloatingBarController {
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         self.loupePanel = panel
+        return panel
+    }
+
+    private func ensureSubmenuPanel() -> NSPanel {
+        if let submenuPanel { return submenuPanel }
+        let panel = FloatingBarPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 252, height: 120),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.allowsKeyFocus = true
+        panel.becomesKeyOnlyIfNeeded = false
+        panel.level = .statusBar
+        panel.isFloatingPanel = true
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        self.submenuPanel = panel
         return panel
     }
 
@@ -413,6 +642,7 @@ final class FloatingBarController {
             guard let self, self.isShown, !self.engine.isContextMenuOpen, let panel = self.panel else { return event }
             if event.window === panel
                 || event.window === self.loupePanel
+                || event.window === self.submenuPanel
                 || event.window === statusButtonWindow
                 || event.window?.title == "BarLens"
                 || event.window?.className.contains("StatusBar") == true {
@@ -797,7 +1027,7 @@ private struct FloatingBarSeparator: View {
     }
 }
 
-// MARK: - Unified Liquid Glass Optical Loupe Card
+// MARK: - Unified Liquid Glass Optical Loupe Card & Cascading Submenu Flyout
 
 private struct FloatingLensLoupeView: View {
     let item: FloatingBarItem
@@ -858,14 +1088,34 @@ private struct FloatingLensLoupeView: View {
         }
     }
 
-    private func triggerNativeMenu() {
+    private func triggerNativeMenu(preferredIndex: Int? = nil) {
         coordinator.dismissImmediately()
         switch item.target {
         case .app(let bundleID, _):
-            engine.activateFromFloatingBar(bundleID: bundleID)
+            engine.activateFromFloatingBar(bundleID: bundleID, preferredIndex: preferredIndex)
         case .system(let sysItem, _):
             engine.activateFromFloatingBar(systemItem: sysItem)
         }
+    }
+
+    private var symmetricConnectorGradient: LinearGradient {
+        let glow = colorScheme == .dark
+            ? Color(red: 0.36, green: 0.84, blue: 1.0)
+            : Color(red: 0.14, green: 0.60, blue: 0.94)
+        let center = colorScheme == .dark
+            ? Color.white.opacity(0.96)
+            : Color(red: 0.06, green: 0.50, blue: 0.90).opacity(0.88)
+        return LinearGradient(
+            stops: [
+                .init(color: glow.opacity(0.0), location: 0.00),
+                .init(color: glow.opacity(colorScheme == .dark ? 0.50 : 0.38), location: 0.28),
+                .init(color: center, location: 0.50),
+                .init(color: glow.opacity(colorScheme == .dark ? 0.50 : 0.38), location: 0.72),
+                .init(color: glow.opacity(0.0), location: 1.00),
+            ],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
     }
 
     var body: some View {
@@ -876,8 +1126,16 @@ private struct FloatingLensLoupeView: View {
                 interactiveControlSection(control)
             }
 
+            if case .app(let bundleID, _) = item.target, item.telemetry.statusSubItems.count > 1 {
+                statusSubItemsSection(bundleID: bundleID, subItems: item.telemetry.statusSubItems)
+            }
+
             if !displayRows.isEmpty {
                 factRowsSection(displayRows)
+            }
+
+            if case .app(let bundleID, _) = item.target, !item.telemetry.openWindowTitles.isEmpty {
+                openWindowsSection(bundleID: bundleID, titles: item.telemetry.openWindowTitles)
             }
 
             if case .app(let bundleID, _) = item.target, !item.telemetry.tunnelActions.isEmpty {
@@ -894,21 +1152,10 @@ private struct FloatingLensLoupeView: View {
         .frame(width: 288)
         .settingsGlass(cornerRadius: 18)
         .overlay(alignment: .top) {
-            // Subtle refractive specular beam aligned right underneath the hovered icon.
+            // Palindromic 5-stop optical connector beam centered to the sub-pixel beneath the hovered icon.
             Capsule()
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.0),
-                            Color.white.opacity(colorScheme == .dark ? 0.72 : 0.95),
-                            BarLensPalette.ink(.cyan, in: colorScheme).opacity(0.55),
-                            Color.white.opacity(0.0),
-                        ],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .frame(width: 30, height: 2)
+                .fill(symmetricConnectorGradient)
+                .frame(width: 32, height: 2.2)
                 .offset(x: pointerOffsetX, y: 0.5)
                 .allowsHitTesting(false)
         }
@@ -918,10 +1165,12 @@ private struct FloatingLensLoupeView: View {
                 .shadow(color: .black.opacity(colorScheme == .dark ? 0.36 : 0.14), radius: 9, y: 4)
                 .shadow(color: .black.opacity(colorScheme == .dark ? 0.18 : 0.06), radius: 2.5, y: 1)
         }
-        // Top 8pt padding acts as a seamless hover bridge right below the Floating Bar capsule.
+        // Top 8pt padding acts as a seamless hover bridge right below the Floating Bar capsule;
+        // symmetric 14pt left & right padding keeps the 288pt card dead-center inside the 316pt panel.
         .padding(.top, 8)
         .padding(.horizontal, 14)
         .padding(.bottom, 16)
+        .frame(width: 316)
         .contentShape(Rectangle())
         .environment(\.colorScheme, colorScheme)
         .preferredColorScheme(colorScheme)
@@ -1013,6 +1262,31 @@ private struct FloatingLensLoupeView: View {
         }
     }
 
+    // MARK: Multi-Icon Status Modules (e.g. iStat Menus, Stats)
+
+    private func statusSubItemsSection(bundleID: String, subItems: [StatusSubItemOption]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(tr("顶栏模块", "Status Bar Modules"))
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.primary.opacity(0.56))
+                .padding(.leading, 2)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 5) {
+                    ForEach(subItems) { sub in
+                        LoupeChipButton(
+                            title: sub.title,
+                            icon: "menubar.arrow.down.rectangle",
+                            isSelected: false
+                        ) {
+                            triggerNativeMenu(preferredIndex: sub.indexInApp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: Structured Fact Rows
 
     private func factRowsSection(_ rows: [LensFactRow]) -> some View {
@@ -1062,7 +1336,37 @@ private struct FloatingLensLoupeView: View {
         }
     }
 
-    // MARK: Interactive System Controls
+    // MARK: Active Application Windows
+
+    private func openWindowsSection(bundleID: String, titles: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(tr("活动窗口", "Active Windows"))
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.primary.opacity(0.56))
+                .padding(.leading, 2)
+
+            VStack(alignment: .leading, spacing: 3.5) {
+                ForEach(titles, id: \.self) { winTitle in
+                    LoupeActionRowButton(
+                        icon: "macwindow",
+                        title: winTitle,
+                        trailing: nil,
+                        showsSubmenuChevron: false,
+                        isHighlighted: false,
+                        onHoverChanged: { isHovering, _ in
+                            if isHovering { coordinator.nonSubmenuRowHovered() }
+                        },
+                        action: {
+                            coordinator.dismissImmediately()
+                            engine.focusApplicationWindow(bundleID: bundleID, windowTitle: winTitle)
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    // MARK: Interactive System & Media Controls
 
     @ViewBuilder
     private func interactiveControlSection(_ control: LensInteractiveControl) -> some View {
@@ -1070,20 +1374,13 @@ private struct FloatingLensLoupeView: View {
         case .audioOutput(let volume, let isMuted, _, let devices):
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 8) {
-                    Button {
+                    LoupeIconSquareButton(
+                        symbol: isMuted ? "speaker.slash.fill" : (volume > 0.5 ? "speaker.wave.2.fill" : "speaker.wave.1.fill"),
+                        tint: isMuted ? BarLensPalette.ink(.orange, in: colorScheme) : BarLensPalette.ink(.cyan, in: colorScheme)
+                    ) {
                         SystemTelemetryReader.shared.toggleOutputMute()
                         engine.bumpSystemTelemetry()
-                    } label: {
-                        Image(systemName: isMuted ? "speaker.slash.fill" : (volume > 0.5 ? "speaker.wave.2.fill" : "speaker.wave.1.fill"))
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(isMuted ? BarLensPalette.ink(.orange, in: colorScheme) : BarLensPalette.ink(.cyan, in: colorScheme))
-                            .frame(width: 26, height: 24)
-                            .background(
-                                colorScheme == .dark ? Color.white.opacity(0.10) : Color.black.opacity(0.06),
-                                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            )
                     }
-                    .buttonStyle(.plain)
 
                     LiquidGlassVolumeBar(volume: isMuted ? 0 : volume) { newVol in
                         SystemTelemetryReader.shared.setOutputVolume(newVol)
@@ -1104,6 +1401,7 @@ private struct FloatingLensLoupeView: View {
                                 icon: dev.isCurrent ? "checkmark.circle.fill" : "hifispeaker",
                                 title: dev.name,
                                 trailing: dev.isCurrent ? tr("当前", "Active") : nil,
+                                showsSubmenuChevron: false,
                                 isHighlighted: dev.isCurrent
                             ) {
                                 SystemTelemetryReader.shared.selectOutputDevice(dev.id)
@@ -1115,15 +1413,17 @@ private struct FloatingLensLoupeView: View {
             }
 
         case .inputSources(let sources):
-            HStack(spacing: 5) {
-                ForEach(sources) { src in
-                    LoupeChipButton(
-                        title: src.name,
-                        icon: src.isCurrent ? "checkmark" : nil,
-                        isSelected: src.isCurrent
-                    ) {
-                        SystemTelemetryReader.shared.selectInputSource(id: src.id)
-                        engine.bumpSystemTelemetry()
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 5) {
+                    ForEach(sources) { src in
+                        LoupeChipButton(
+                            title: src.name,
+                            icon: src.isCurrent ? "checkmark" : nil,
+                            isSelected: src.isCurrent
+                        ) {
+                            SystemTelemetryReader.shared.selectInputSource(id: src.id)
+                            engine.bumpSystemTelemetry()
+                        }
                     }
                 }
             }
@@ -1159,10 +1459,36 @@ private struct FloatingLensLoupeView: View {
                 }
                 Spacer(minLength: 0)
             }
+
+        case .mediaPlayback(let nowPlayingHint):
+            VStack(alignment: .leading, spacing: 5) {
+                if let hint = nowPlayingHint, !hint.isEmpty {
+                    HStack(spacing: 5) {
+                        Image(systemName: "waveform")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(BarLensPalette.ink(.cyan, in: colorScheme))
+                        Text(hint)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.primary.opacity(0.88))
+                            .lineLimit(1)
+                    }
+                }
+                HStack(spacing: 8) {
+                    LoupeTransportButton(symbol: "backward.fill", label: tr("上一首", "Prev")) {
+                        SystemTelemetryReader.sendMediaCommand(.previous)
+                    }
+                    LoupeTransportButton(symbol: "playpause.fill", label: tr("播放 / 暂停", "Play / Pause"), isPrimary: true) {
+                        SystemTelemetryReader.sendMediaCommand(.playPause)
+                    }
+                    LoupeTransportButton(symbol: "forward.fill", label: tr("下一首", "Next")) {
+                        SystemTelemetryReader.sendMediaCommand(.next)
+                    }
+                }
+            }
         }
     }
 
-    // MARK: Submenu Action Tunneling
+    // MARK: Submenu Action Tunneling (Direct Click + Hover Cascading Submenu)
 
     private func tunnelActionsSection(bundleID: String, actions: [LensTunnelAction]) -> some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -1172,16 +1498,37 @@ private struct FloatingLensLoupeView: View {
                 .padding(.leading, 2)
 
             VStack(alignment: .leading, spacing: 3.5) {
-                ForEach(actions.prefix(4)) { action in
+                ForEach(actions.prefix(6)) { action in
+                    let isExpandedParent = (coordinator.activeSubmenu?.action.id == action.id)
                     LoupeActionRowButton(
-                        icon: action.isChecked ? "checkmark.circle.fill" : "bolt.fill",
+                        icon: action.isChecked
+                            ? "checkmark.circle.fill"
+                            : (action.hasSubmenu ? "square.stack.3d.up" : "bolt.fill"),
                         title: action.title,
                         trailing: action.shortcutHint,
-                        isHighlighted: action.isChecked
-                    ) {
-                        coordinator.dismissImmediately()
-                        engine.performTunnelAction(action, bundleID: bundleID)
-                    }
+                        showsSubmenuChevron: action.hasSubmenu,
+                        isHighlighted: action.isChecked || isExpandedParent,
+                        onHoverChanged: { isHovering, rowScreenRect in
+                            if action.hasSubmenu {
+                                coordinator.submenuParentRowHoverChanged(
+                                    parentItemID: item.id,
+                                    bundleID: bundleID,
+                                    action: action,
+                                    isHovering: isHovering,
+                                    rowScreenRect: rowScreenRect
+                                )
+                            } else if isHovering {
+                                coordinator.nonSubmenuRowHovered()
+                            }
+                        },
+                        action: {
+                            if action.hasSubmenu {
+                                return
+                            }
+                            coordinator.dismissImmediately()
+                            engine.performTunnelAction(action, bundleID: bundleID)
+                        }
+                    )
                 }
             }
         }
@@ -1232,7 +1579,155 @@ private struct FloatingLensLoupeView: View {
     }
 }
 
-// MARK: - Optical Loupe Interactive Subcomponents
+// MARK: - Secondary Cascading Submenu Flyout View
+
+private struct FloatingLensSubmenuFlyoutView: View {
+    let submenu: LensLoupeCoordinator.ActiveSubmenu
+    @ObservedObject var engine: DividerEngine
+    @ObservedObject var coordinator: LensLoupeCoordinator
+    @State private var expandedThirdLevelID: String?
+
+    private var colorScheme: ColorScheme { engine.effectiveColorScheme }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "square.stack.3d.up")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(BarLensPalette.ink(.cyan, in: colorScheme))
+                Text(submenu.action.title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.primary.opacity(0.78))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 4)
+
+            let children = submenu.action.children
+            let useScroll = children.count > 7
+            Group {
+                if useScroll {
+                    ScrollView(.vertical, showsIndicators: true) {
+                        submenuRowsList(children)
+                    }
+                    .frame(maxHeight: 236)
+                } else {
+                    submenuRowsList(children)
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .frame(width: 228)
+        .settingsGlass(cornerRadius: 15)
+        .background {
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .fill(Color.black.opacity(0.001))
+                .shadow(color: .black.opacity(colorScheme == .dark ? 0.34 : 0.13), radius: 8, y: 3)
+                .shadow(color: .black.opacity(colorScheme == .dark ? 0.18 : 0.06), radius: 2, y: 1)
+        }
+        // Symmetric 12pt horizontal padding creates a continuous gapless hover bridge with LoupePanel!
+        .padding(.top, 8)
+        .padding(.horizontal, 12)
+        .padding(.bottom, 14)
+        .frame(width: 252)
+        .contentShape(Rectangle())
+        .environment(\.colorScheme, colorScheme)
+        .preferredColorScheme(colorScheme)
+        .onHover { hovering in
+            coordinator.submenuFlyoutHoverChanged(hovering) { isInside in
+                engine.isLensLoupeHovered = isInside
+            }
+        }
+        .onChange(of: submenu.action.id) {
+            expandedThirdLevelID = nil
+        }
+    }
+
+    private func submenuRowsList(_ children: [LensTunnelAction]) -> some View {
+        VStack(alignment: .leading, spacing: 3.5) {
+            ForEach(children) { child in
+                if !child.isEnabled && !child.hasSubmenu {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(Color.primary.opacity(0.28))
+                            .frame(width: 4.5, height: 4.5)
+                        Text(child.title)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.primary.opacity(0.56))
+                            .lineLimit(2)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4.5)
+                } else {
+                    let isExpandedThird = (expandedThirdLevelID == child.id)
+                    LoupeActionRowButton(
+                        icon: child.isChecked
+                            ? "checkmark.circle.fill"
+                            : (child.hasSubmenu ? "chevron.right.circle" : "bolt.fill"),
+                        title: child.title,
+                        trailing: child.shortcutHint,
+                        showsSubmenuChevron: child.hasSubmenu,
+                        isHighlighted: child.isChecked || isExpandedThird,
+                        onHoverChanged: { isHovering, _ in
+                            if isHovering && child.hasSubmenu {
+                                withAnimation(.easeOut(duration: 0.14)) {
+                                    expandedThirdLevelID = child.id
+                                }
+                            }
+                        },
+                        action: {
+                            if child.hasSubmenu {
+                                withAnimation(.easeOut(duration: 0.14)) {
+                                    expandedThirdLevelID = (expandedThirdLevelID == child.id) ? nil : child.id
+                                }
+                                return
+                            }
+                            coordinator.dismissImmediately()
+                            engine.performTunnelAction(child, bundleID: submenu.bundleID)
+                        }
+                    )
+
+                    if child.hasSubmenu && isExpandedThird {
+                        VStack(alignment: .leading, spacing: 3) {
+                            ForEach(child.children) { leaf in
+                                if !leaf.isEnabled {
+                                    Text(leaf.title)
+                                        .font(.system(size: 10.5, weight: .medium))
+                                        .foregroundStyle(.primary.opacity(0.52))
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                } else {
+                                    LoupeActionRowButton(
+                                        icon: leaf.isChecked ? "checkmark.circle.fill" : "bolt.fill",
+                                        title: leaf.title,
+                                        trailing: leaf.shortcutHint,
+                                        showsSubmenuChevron: false,
+                                        isHighlighted: leaf.isChecked
+                                    ) {
+                                        coordinator.dismissImmediately()
+                                        engine.performTunnelAction(leaf, bundleID: submenu.bundleID)
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.leading, 10)
+                        .overlay(alignment: .leading) {
+                            Capsule()
+                                .fill(BarLensPalette.ink(.cyan, in: colorScheme).opacity(0.35))
+                                .frame(width: 2)
+                                .padding(.vertical, 3)
+                                .padding(.leading, 3)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Optical Loupe First-Mouse Interactive Subcomponents
 
 private struct LiquidGlassVolumeBar: View {
     let volume: Double
@@ -1268,16 +1763,89 @@ private struct LiquidGlassVolumeBar: View {
                     .offset(x: min(max(0, w * clamped - 6.5), w - 13))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        let next = min(max(0, Double(value.location.x / w)), 1)
-                        onChange(next)
-                    }
-            )
+            .overlay {
+                LoupeScrubberSurface(onScrub: onChange)
+            }
         }
         .frame(height: 20)
+    }
+}
+
+private struct LoupeIconSquareButton: View {
+    let symbol: String
+    let tint: Color
+    let action: () -> Void
+    @State private var hovered = false
+    @State private var pressed = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(tint)
+            .frame(width: 26, height: 24)
+            .background(
+                hovered
+                    ? (colorScheme == .dark ? Color.white.opacity(0.16) : Color.black.opacity(0.10))
+                    : (colorScheme == .dark ? Color.white.opacity(0.10) : Color.black.opacity(0.06)),
+                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+            )
+            .scaleEffect(pressed ? 0.93 : 1.0)
+            .overlay {
+                LoupeMouseSurface(
+                    onHoverChanged: { isHov, _ in hovered = isHov },
+                    onPressedChanged: { pressed = $0 },
+                    onClick: action
+                )
+            }
+    }
+}
+
+private struct LoupeTransportButton: View {
+    let symbol: String
+    let label: String
+    var isPrimary: Bool = false
+    let action: () -> Void
+    @State private var hovered = false
+    @State private var pressed = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: symbol)
+                .font(.system(size: isPrimary ? 11.5 : 10.5, weight: .semibold))
+            if isPrimary {
+                Text(label)
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .lineLimit(1)
+            }
+        }
+        .foregroundStyle(
+            isPrimary
+                ? BarLensPalette.ink(.cyan, in: colorScheme)
+                : .primary.opacity(hovered ? 0.94 : 0.78)
+        )
+        .frame(maxWidth: isPrimary ? .infinity : nil)
+        .padding(.horizontal, isPrimary ? 10 : 11)
+        .frame(height: 26)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(
+                    hovered
+                        ? (colorScheme == .dark ? Color.white.opacity(0.15) : Color.black.opacity(0.085))
+                        : (isPrimary
+                            ? BarLensPalette.badgeFill(.cyan, in: colorScheme)
+                            : (colorScheme == .dark ? Color.white.opacity(0.065) : Color.black.opacity(0.04)))
+                )
+        )
+        .scaleEffect(pressed ? 0.95 : 1.0)
+        .overlay {
+            LoupeMouseSurface(
+                onHoverChanged: { isHov, _ in hovered = isHov },
+                onPressedChanged: { pressed = $0 },
+                onClick: action
+            )
+        }
     }
 }
 
@@ -1285,56 +1853,70 @@ private struct LoupeActionRowButton: View {
     let icon: String
     let title: String
     let trailing: String?
+    var showsSubmenuChevron: Bool = false
     var isHighlighted: Bool = false
+    var onHoverChanged: ((Bool, NSRect?) -> Void)? = nil
     let action: () -> Void
     @State private var hovered = false
+    @State private var pressed = false
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 7) {
-                Image(systemName: icon)
-                    .font(.system(size: 10, weight: .semibold))
+        HStack(spacing: 7) {
+            Image(systemName: icon)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(
+                    isHighlighted || hovered
+                        ? BarLensPalette.ink(.cyan, in: colorScheme)
+                        : .primary.opacity(0.65)
+                )
+                .frame(width: 13)
+
+            Text(title)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(.primary.opacity(0.92))
+                .lineLimit(1)
+
+            Spacer(minLength: 4)
+
+            if let trailing, !trailing.isEmpty {
+                Text(trailing)
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(.primary.opacity(0.55))
+            }
+            if showsSubmenuChevron {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9.5, weight: .bold))
                     .foregroundStyle(
                         isHighlighted || hovered
                             ? BarLensPalette.ink(.cyan, in: colorScheme)
-                            : .primary.opacity(0.65)
+                            : .primary.opacity(0.45)
                     )
-                    .frame(width: 13)
-
-                Text(title)
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(.primary.opacity(0.92))
-                    .lineLimit(1)
-
-                Spacer(minLength: 4)
-
-                if let trailing, !trailing.isEmpty {
-                    Text(trailing)
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .foregroundStyle(.primary.opacity(0.55))
-                } else {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.primary.opacity(hovered ? 0.65 : 0.30))
-                }
             }
-            .padding(.horizontal, 8.5)
-            .padding(.vertical, 5)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(
-                        hovered
-                            ? (colorScheme == .dark ? Color.white.opacity(0.14) : Color.black.opacity(0.075))
-                            : (isHighlighted
-                                ? BarLensPalette.badgeFill(.cyan, in: colorScheme)
-                                : (colorScheme == .dark ? Color.white.opacity(0.05) : Color.black.opacity(0.03)))
-                    )
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
-        .buttonStyle(.plain)
-        .onHover { hovered = $0 }
+        .padding(.horizontal, 8.5)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(
+                    hovered
+                        ? (colorScheme == .dark ? Color.white.opacity(0.14) : Color.black.opacity(0.075))
+                        : (isHighlighted
+                            ? BarLensPalette.badgeFill(.cyan, in: colorScheme)
+                            : (colorScheme == .dark ? Color.white.opacity(0.05) : Color.black.opacity(0.03)))
+                )
+        )
+        .scaleEffect(pressed && !showsSubmenuChevron ? 0.98 : 1.0)
+        .overlay {
+            LoupeMouseSurface(
+                onHoverChanged: { isHov, rect in
+                    hovered = isHov
+                    onHoverChanged?(isHov, rect)
+                },
+                onPressedChanged: { pressed = $0 },
+                onClick: action
+            )
+        }
     }
 }
 
@@ -1344,40 +1926,44 @@ private struct LoupeChipButton: View {
     var isSelected: Bool = false
     let action: () -> Void
     @State private var hovered = false
+    @State private var pressed = false
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 4.5) {
-                if let icon {
-                    Image(systemName: icon)
-                        .font(.system(size: 10, weight: .bold))
-                }
-                Text(title)
-                    .font(.system(size: 11, weight: .semibold))
-                    .lineLimit(1)
+        HStack(spacing: 4.5) {
+            if let icon {
+                Image(systemName: icon)
+                    .font(.system(size: 10, weight: .bold))
             }
-            .foregroundStyle(
-                isSelected
-                    ? BarLensPalette.ink(.cyan, in: colorScheme)
-                    : .primary.opacity(0.86)
-            )
-            .padding(.horizontal, 9)
-            .padding(.vertical, 4.5)
-            .background(
-                Capsule()
-                    .fill(
-                        isSelected
-                            ? BarLensPalette.badgeFill(.cyan, in: colorScheme)
-                            : (hovered
-                                ? (colorScheme == .dark ? Color.white.opacity(0.14) : Color.black.opacity(0.08))
-                                : (colorScheme == .dark ? Color.white.opacity(0.07) : Color.black.opacity(0.045)))
-                    )
-            )
-            .contentShape(Capsule())
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .lineLimit(1)
         }
-        .buttonStyle(.plain)
-        .onHover { hovered = $0 }
+        .foregroundStyle(
+            isSelected
+                ? BarLensPalette.ink(.cyan, in: colorScheme)
+                : .primary.opacity(0.86)
+        )
+        .padding(.horizontal, 9)
+        .padding(.vertical, 4.5)
+        .background(
+            Capsule()
+                .fill(
+                    isSelected
+                        ? BarLensPalette.badgeFill(.cyan, in: colorScheme)
+                        : (hovered
+                            ? (colorScheme == .dark ? Color.white.opacity(0.14) : Color.black.opacity(0.08))
+                            : (colorScheme == .dark ? Color.white.opacity(0.07) : Color.black.opacity(0.045)))
+                )
+        )
+        .scaleEffect(pressed ? 0.95 : 1.0)
+        .overlay {
+            LoupeMouseSurface(
+                onHoverChanged: { isHov, _ in hovered = isHov },
+                onPressedChanged: { pressed = $0 },
+                onClick: action
+            )
+        }
     }
 }
 
@@ -1387,6 +1973,7 @@ private struct LoupeUtilityButton: View {
     var isDestructive: Bool = false
     let action: () -> Void
     @State private var hovered = false
+    @State private var pressed = false
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -1394,30 +1981,152 @@ private struct LoupeUtilityButton: View {
             ? Color(red: 0.92, green: 0.26, blue: 0.25)
             : .primary.opacity(hovered ? 0.94 : 0.74)
 
-        Button(action: action) {
-            HStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.system(size: 10.5, weight: .semibold))
-                Text(label)
-                    .font(.system(size: 11, weight: .medium))
-            }
-            .foregroundStyle(fg)
-            .padding(.horizontal, 7.5)
-            .padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(
-                        hovered
-                            ? (isDestructive
-                                ? Color(red: 0.92, green: 0.26, blue: 0.25).opacity(colorScheme == .dark ? 0.18 : 0.12)
-                                : (colorScheme == .dark ? Color.white.opacity(0.12) : Color.black.opacity(0.065)))
-                            : Color.clear
-                    )
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.system(size: 10.5, weight: .semibold))
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
         }
-        .buttonStyle(.plain)
-        .onHover { hovered = $0 }
+        .foregroundStyle(fg)
+        .padding(.horizontal, 7.5)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(
+                    hovered
+                        ? (isDestructive
+                            ? Color(red: 0.92, green: 0.26, blue: 0.25).opacity(colorScheme == .dark ? 0.18 : 0.12)
+                            : (colorScheme == .dark ? Color.white.opacity(0.12) : Color.black.opacity(0.065)))
+                        : Color.clear
+                )
+        )
+        .scaleEffect(pressed ? 0.95 : 1.0)
+        .overlay {
+            LoupeMouseSurface(
+                onHoverChanged: { isHov, _ in hovered = isHov },
+                onPressedChanged: { pressed = $0 },
+                onClick: action
+            )
+        }
+    }
+}
+
+private struct LoupeMouseSurface: NSViewRepresentable {
+    let onHoverChanged: (Bool, NSRect?) -> Void
+    let onPressedChanged: (Bool) -> Void
+    let onClick: () -> Void
+
+    func makeNSView(context: Context) -> LoupeMouseSurfaceView {
+        let v = LoupeMouseSurfaceView()
+        v.onHoverChanged = onHoverChanged
+        v.onPressedChanged = onPressedChanged
+        v.onClick = onClick
+        return v
+    }
+
+    func updateNSView(_ nsView: LoupeMouseSurfaceView, context: Context) {
+        nsView.onHoverChanged = onHoverChanged
+        nsView.onPressedChanged = onPressedChanged
+        nsView.onClick = onClick
+    }
+}
+
+private final class LoupeMouseSurfaceView: NSView {
+    var onHoverChanged: ((Bool, NSRect?) -> Void)?
+    var onPressedChanged: ((Bool) -> Void)?
+    var onClick: (() -> Void)?
+
+    private var trackingArea: NSTrackingArea?
+    private var isTrackingMouse = false
+
+    private var currentScreenBounds: NSRect? {
+        guard let window else { return nil }
+        return window.convertToScreen(convert(bounds, to: nil))
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        onHoverChanged?(true, currentScreenBounds)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        if !isTrackingMouse {
+            onHoverChanged?(false, nil)
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        isTrackingMouse = true
+        onPressedChanged?(true)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard isTrackingMouse else { return }
+        isTrackingMouse = false
+        onPressedChanged?(false)
+        let localPt = convert(event.locationInWindow, from: nil)
+        if bounds.insetBy(dx: -4, dy: -4).contains(localPt) {
+            onClick?()
+        }
+        let localNow = window.map { convert($0.mouseLocationOutsideOfEventStream, from: nil) } ?? .zero
+        if !bounds.contains(localNow) {
+            onHoverChanged?(false, nil)
+        }
+    }
+}
+
+private struct LoupeScrubberSurface: NSViewRepresentable {
+    let onScrub: (Double) -> Void
+
+    func makeNSView(context: Context) -> LoupeScrubberView {
+        let v = LoupeScrubberView()
+        v.onScrub = onScrub
+        return v
+    }
+
+    func updateNSView(_ nsView: LoupeScrubberView, context: Context) {
+        nsView.onScrub = onScrub
+    }
+}
+
+private final class LoupeScrubberView: NSView {
+    var onScrub: ((Double) -> Void)?
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    private func report(for event: NSEvent) {
+        let w = max(1, bounds.width)
+        let pt = convert(event.locationInWindow, from: nil)
+        let normalized = min(max(0, Double(pt.x / w)), 1)
+        onScrub?(normalized)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        report(for: event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        report(for: event)
     }
 }
 
@@ -1835,14 +2544,37 @@ private struct FloatingBarItemButton: View {
                 let tunnelHeader = NSMenuItem(title: tr("子菜单直达", "Quick Menu Actions"), action: nil, keyEquivalent: "")
                 tunnelHeader.isEnabled = false
                 menu.addItem(tunnelHeader)
-                for action in item.telemetry.tunnelActions.prefix(5) {
-                    let m = MenuActionItem(
-                        title: action.title,
-                        symbol: action.isChecked ? "checkmark.circle" : "bolt"
-                    ) {
-                        engine.performTunnelAction(action, bundleID: bundleID)
+                func makeTunnelNSMenuItem(_ action: LensTunnelAction) -> NSMenuItem {
+                    if action.hasSubmenu {
+                        let parent = NSMenuItem(title: action.title, action: nil, keyEquivalent: "")
+                        if let img = NSImage(systemSymbolName: "square.stack.3d.up", accessibilityDescription: nil) {
+                            let cfg = NSImage.SymbolConfiguration(pointSize: 12.5, weight: .regular)
+                            parent.image = img.withSymbolConfiguration(cfg) ?? img
+                        }
+                        let sub = NSMenu(title: action.title)
+                        sub.autoenablesItems = false
+                        for child in action.children {
+                            sub.addItem(makeTunnelNSMenuItem(child))
+                        }
+                        parent.submenu = sub
+                        return parent
+                    } else if !action.isEnabled {
+                        let disabled = NSMenuItem(title: action.title, action: nil, keyEquivalent: "")
+                        disabled.isEnabled = false
+                        return disabled
+                    } else {
+                        let leaf = MenuActionItem(
+                            title: action.title,
+                            symbol: action.isChecked ? "checkmark.circle" : "bolt"
+                        ) {
+                            engine.performTunnelAction(action, bundleID: bundleID)
+                        }
+                        leaf.state = action.isChecked ? .on : .off
+                        return leaf
                     }
-                    menu.addItem(m)
+                }
+                for action in item.telemetry.tunnelActions.prefix(6) {
+                    menu.addItem(makeTunnelNSMenuItem(action))
                 }
             }
         }

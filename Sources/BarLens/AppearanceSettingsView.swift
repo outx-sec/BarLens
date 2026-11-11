@@ -417,10 +417,22 @@ struct AppearanceSettingsView: View {
         .frame(width: 228, height: 28)
         .previewCapsuleGlass(cornerRadius: 12)
         .overlay(alignment: .top) {
+            let glow = colorScheme == .dark
+                ? Color(red: 0.36, green: 0.84, blue: 1.0)
+                : Color(red: 0.14, green: 0.60, blue: 0.94)
+            let center = colorScheme == .dark
+                ? Color.white.opacity(0.95)
+                : Color(red: 0.06, green: 0.50, blue: 0.90).opacity(0.88)
             Capsule()
                 .fill(
                     LinearGradient(
-                        colors: [.clear, .white.opacity(0.85), cyanInk.opacity(0.55), .clear],
+                        stops: [
+                            .init(color: glow.opacity(0.0), location: 0.00),
+                            .init(color: glow.opacity(0.42), location: 0.28),
+                            .init(color: center, location: 0.50),
+                            .init(color: glow.opacity(0.42), location: 0.72),
+                            .init(color: glow.opacity(0.0), location: 1.00),
+                        ],
                         startPoint: .leading,
                         endPoint: .trailing
                     )
