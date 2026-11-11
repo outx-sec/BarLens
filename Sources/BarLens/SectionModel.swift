@@ -346,6 +346,7 @@ struct BarLensProfile: Codable, Equatable {
     var hoverRevealDelay: Int
     var appLanguage: String
     var hotkeys: [String: Hotkey]
+    var lensTelemetryEnabled: Bool? = nil
 
     func encodedJSON() throws -> Data {
         let encoder = JSONEncoder()

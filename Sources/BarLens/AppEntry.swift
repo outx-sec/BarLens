@@ -33,6 +33,8 @@ struct AppEntry: Identifiable {
     /// Whether this app has an explicit user assignment rather than inheriting
     /// the default section (`unclassified`).
     var isClassified: Bool = true
+    /// Zero-capture live Accessibility telemetry distilled for BarLens's Semantic Lens.
+    var telemetry: LensTelemetry = .empty
 
     var id: String { bundleID }
 
@@ -217,7 +219,16 @@ enum AppCatalog {
         for item in discovered { counts[item.ownerBundleID, default: 0] += 1 }
 
         var labels: [String: [String]] = [:]
+        var rawTelemetryByOwner: [String: [RawAXItemTelemetry]] = [:]
         for item in discovered {
+            rawTelemetryByOwner[item.ownerBundleID, default: []].append(
+                RawAXItemTelemetry(
+                    title: item.axTitle ?? item.label,
+                    description: item.axDescription,
+                    value: item.axValue,
+                    help: item.axHelp
+                )
+            )
             // Digits are state, not identity: WeChat publishes its unread count
             // as its title, and a count in a list of names is noise that changes
             // underfoot. Words are kept even when they are also state —
@@ -249,6 +260,13 @@ enum AppCatalog {
                                   monochromeIcon: monoIcon)
                 info[bundleID] = details
             }
+            let extractedTelemetry = (app != nil)
+                ? SemanticLensExtractor.extract(
+                    appName: details.name,
+                    bundleID: bundleID,
+                    items: rawTelemetryByOwner[bundleID] ?? []
+                )
+                : .empty
             return AppEntry(bundleID: bundleID,
                             name: details.name,
                             icon: details.icon,
@@ -259,7 +277,8 @@ enum AppCatalog {
                             isLedgerOnly: extraOwners.contains(bundleID)
                                 && !counts.keys.contains(bundleID),
                             itemCount: counts[bundleID] ?? 0,
-                            isClassified: model.isClassified(bundleID))
+                            isClassified: model.isClassified(bundleID),
+                            telemetry: extractedTelemetry)
         }
 
         return entries.sorted {
@@ -274,6 +293,7 @@ enum AppCatalog {
             || entry.displayName.localizedCaseInsensitiveContains(trimmed)
             || entry.bundleID.localizedCaseInsensitiveContains(trimmed)
             || entry.itemLabels.contains { $0.localizedCaseInsensitiveContains(trimmed) }
+            || (entry.telemetry.fullSummary?.localizedCaseInsensitiveContains(trimmed) == true)
     }
 }
 

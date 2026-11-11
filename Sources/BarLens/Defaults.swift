@@ -314,6 +314,16 @@ enum Defaults {
         static let settingsPane = "settingsPane"
         static let unclassifiedSection = "unclassifiedSection"
         static let newSystemItemSection = "newSystemItemSection"
+        static let lensTelemetryEnabled = "lensTelemetryEnabled"
+    }
+
+    static var lensTelemetryEnabled: Bool {
+        get {
+            UserDefaults.standard.object(forKey: Key.lensTelemetryEnabled) as? Bool ?? true
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: Key.lensTelemetryEnabled)
+        }
     }
 
     static var appLanguage: AppLanguage {

@@ -42,6 +42,11 @@ struct MenuBarItem {
     /// publishes neither attribute.
     let label: String?
     let indexInApp: Int
+    /// Optional raw Accessibility strings retained for BarLens's zero-capture Semantic Lens.
+    var axTitle: String? = nil
+    var axDescription: String? = nil
+    var axValue: String? = nil
+    var axHelp: String? = nil
 }
 
 struct ItemScanApplication {
@@ -237,16 +242,36 @@ enum ItemEnumerator {
                     } else if application.bundleID == "com.apple.Siri" {
                         scannedSystemItems.insert("com.apple.menuextra.siri")
                     }
-                    let title = try AXReadBudget.optionalMetadata {
+                    var title = try AXReadBudget.optionalMetadata {
                         try reader.string(child, kAXTitleAttribute as String)
                     }
-                    let label = try title ?? AXReadBudget.optionalMetadata {
+                    var desc = try AXReadBudget.optionalMetadata {
                         try reader.string(child, kAXDescriptionAttribute as String)
                     }
+                    var val = try AXReadBudget.optionalMetadata {
+                        try reader.string(child, kAXValueAttribute as String)
+                    }
+                    let help = try AXReadBudget.optionalMetadata {
+                        try reader.string(child, kAXHelpAttribute as String)
+                    }
+                    if (title == nil || title?.isEmpty == true) && (desc == nil || desc?.isEmpty == true),
+                       application.bundleID == "com.apple.MenuBarAgent" {
+                        let nested = try nestedTelemetry(in: child, depth: 0, reader: reader)
+                        if title == nil || title?.isEmpty == true { title = nested.title }
+                        if desc == nil || desc?.isEmpty == true { desc = nested.description }
+                        if val == nil || val?.isEmpty == true { val = nested.value }
+                    }
+                    let nonEmptyTitle = (title?.isEmpty == false) ? title : nil
+                    let nonEmptyDesc = (desc?.isEmpty == false) ? desc : nil
+                    let label = nonEmptyTitle ?? nonEmptyDesc
                     appItems.append(MenuBarItem(ownerBundleID: application.bundleID,
                         ownerPID: application.pid, frame: frame, display: display,
                         axIdentifier: identifier, label: label,
-                        indexInApp: index))
+                        indexInApp: index,
+                        axTitle: nonEmptyTitle,
+                        axDescription: nonEmptyDesc,
+                        axValue: (val?.isEmpty == false) ? val : nil,
+                        axHelp: (help?.isEmpty == false) ? help : nil))
                 }
                 ownerResults.record(owner: application.bundleID, .complete(appItems))
             } catch {
@@ -770,6 +795,37 @@ enum ItemEnumerator {
             }
         }
         return nil
+    }
+
+    private static func nestedTelemetry(in element: AXUIElement, depth: Int,
+                                        reader: AXReadBudget) throws -> RawAXItemTelemetry {
+        guard depth < 2 else { return RawAXItemTelemetry() }
+        let children: [AXUIElement]
+        do {
+            children = try reader.children(element)
+        } catch AXScanFailure.readFailed(let code)
+            where code == AXError.noValue.rawValue || code == AXError.attributeUnsupported.rawValue {
+            return RawAXItemTelemetry()
+        }
+        for child in children.prefix(4) {
+            let t = try AXReadBudget.optionalMetadata {
+                try reader.string(child, kAXTitleAttribute as String)
+            }
+            let d = try AXReadBudget.optionalMetadata {
+                try reader.string(child, kAXDescriptionAttribute as String)
+            }
+            let v = try AXReadBudget.optionalMetadata {
+                try reader.string(child, kAXValueAttribute as String)
+            }
+            if (t?.isEmpty == false) || (d?.isEmpty == false) || (v?.isEmpty == false) {
+                return RawAXItemTelemetry(title: t, description: d, value: v, help: nil)
+            }
+            let deeper = try nestedTelemetry(in: child, depth: depth + 1, reader: reader)
+            if (deeper.title?.isEmpty == false) || (deeper.description?.isEmpty == false) || (deeper.value?.isEmpty == false) {
+                return deeper
+            }
+        }
+        return RawAXItemTelemetry()
     }
 
     private static func displayFrames() -> [(DisplayID, CGRect)] {

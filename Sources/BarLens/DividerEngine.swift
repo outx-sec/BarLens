@@ -45,6 +45,7 @@ final class DividerEngine: ObservableObject {
     @Published private(set) var appLanguage = Defaults.appLanguage
     @Published private(set) var glassOpacity = Defaults.glassOpacity
     @Published private(set) var rimIntensity = Defaults.rimIntensity
+    @Published private(set) var lensTelemetryEnabled = Defaults.lensTelemetryEnabled
     @Published private(set) var pinnedBundleID: String?
     @Published private(set) var pinnedSystemItemRawValue: Int?
     /// Where an application goes before the user has classified it.
@@ -57,6 +58,7 @@ final class DividerEngine: ObservableObject {
     @Published private(set) var systemItems = SystemItemModel.load()
     @Published private(set) var systemItemModes: [String: ControlCenterShowMode] = MenuBarBuiltIns.controlCenterModes()
     private var liveVisibleSystemItemIDs: Set<String> = []
+    private var systemAXTelemetryByID: [String: LensTelemetry] = [:]
     private var distributedObserver: NSObjectProtocol?
     private var themeDistributedObserver: NSObjectProtocol?
     private var appearanceKVO: NSKeyValueObservation?
@@ -434,6 +436,7 @@ final class DividerEngine: ObservableObject {
                     }
                     self.retainedScanItems = keptItems + freshItems
                     self.latestScanItems = self.retainedScanItems
+                    self.updateSystemAXTelemetry(from: result.items)
                 }
                 let disabledInSystem = MenuBarLedger.disabledBundleIDs()
                 self.hasSystemLedger = ledger != nil
@@ -1441,6 +1444,57 @@ final class DividerEngine: ObservableObject {
         onChange?()
     }
 
+    func setLensTelemetryEnabled(_ enabled: Bool) {
+        guard lensTelemetryEnabled != enabled else { return }
+        lensTelemetryEnabled = enabled
+        Defaults.lensTelemetryEnabled = enabled
+        catalogRevision += 1
+        onChange?()
+    }
+
+    func telemetry(for systemItem: SystemItem) -> LensTelemetry {
+        guard lensTelemetryEnabled else { return .empty }
+        let canonical = SystemItemName.canonicalIdentifier(for: systemItem.identifier)
+        let fallback = systemAXTelemetryByID[canonical] ?? .empty
+        return SystemTelemetryReader.shared.telemetry(for: systemItem, fallbackAX: fallback)
+    }
+
+    private func updateSystemAXTelemetry(from scannedItems: [MenuBarItem]) {
+        var rawByCanonical: [String: [RawAXItemTelemetry]] = [:]
+        for item in scannedItems {
+            let canonical: String?
+            if item.ownerBundleID == "com.apple.MenuBarAgent", let id = item.axIdentifier, !id.isEmpty {
+                canonical = SystemItemName.canonicalIdentifier(for: id)
+            } else if item.ownerBundleID == "com.apple.systemuiserver" {
+                canonical = "com.apple.menuextra.timemachine"
+            } else if item.ownerBundleID == "com.apple.TextInputMenuAgent" {
+                canonical = "com.apple.menuextra.textinput"
+            } else {
+                canonical = nil
+            }
+            guard let canonical else { continue }
+            rawByCanonical[canonical, default: []].append(
+                RawAXItemTelemetry(
+                    title: item.axTitle ?? item.label,
+                    description: item.axDescription,
+                    value: item.axValue,
+                    help: item.axHelp
+                )
+            )
+        }
+        for (canonical, raws) in rawByCanonical {
+            let displayTitle = SystemItemName.title(for: canonical)
+            let distilled = SemanticLensExtractor.extract(
+                appName: displayTitle,
+                bundleID: canonical,
+                items: raws
+            )
+            if distilled.hasLiveSignal {
+                systemAXTelemetryByID[canonical] = distilled
+            }
+        }
+    }
+
     func moveFloatingBarItemToIndex(_ itemID: String, toIndex: Int, within currentIDs: [String]) {
         var updated = floatingBarOrder
         updated.moveToIndex(itemID: itemID, toIndex: toIndex, within: currentIDs)
@@ -1502,7 +1556,8 @@ final class DividerEngine: ObservableObject {
             autoRehideInterval: autoRehideInterval.rawValue,
             hoverRevealDelay: hoverRevealDelay.rawValue,
             appLanguage: appLanguage.rawValue,
-            hotkeys: hotkeysRaw
+            hotkeys: hotkeysRaw,
+            lensTelemetryEnabled: lensTelemetryEnabled
         )
     }
 
@@ -1556,6 +1611,9 @@ final class DividerEngine: ObservableObject {
         }
         if let lang = AppLanguage(rawValue: profile.appLanguage) {
             setAppLanguage(lang)
+        }
+        if let lensEnabled = profile.lensTelemetryEnabled {
+            setLensTelemetryEnabled(lensEnabled)
         }
 
         var newBindings: [HotkeyAction: Hotkey] = [:]
