@@ -49,6 +49,7 @@ struct MenuBarItem {
     var axHelp: String? = nil
     var axMenuEntries: [AXMenuSnapshotEntry] = []
     var dockBadge: String? = nil
+    var openWindowTitles: [String] = []
 }
 
 struct ItemScanApplication {
@@ -266,8 +267,10 @@ enum ItemEnumerator {
                     let help = try AXReadBudget.optionalMetadata {
                         try reader.string(child, kAXHelpAttribute as String)
                     }
-                    if (title == nil || title?.isEmpty == true) && (desc == nil || desc?.isEmpty == true),
-                       application.bundleID == "com.apple.MenuBarAgent" {
+                    if (title == nil || title?.isEmpty == true)
+                        && (desc == nil || desc?.isEmpty == true)
+                        && (val == nil || val?.isEmpty == true),
+                       !SectionModel.ownIdentifiers.contains(application.bundleID) {
                         let nested = try nestedTelemetry(in: child, depth: 0, reader: reader)
                         if title == nil || title?.isEmpty == true { title = nested.title }
                         if desc == nil || desc?.isEmpty == true { desc = nested.description }
@@ -292,6 +295,17 @@ enum ItemEnumerator {
                         axValue: (val?.isEmpty == false) ? val : nil,
                         axHelp: (help?.isEmpty == false) ? help : nil,
                         axMenuEntries: menuEntries))
+                }
+                if !appItems.isEmpty,
+                   application.bundleID != "com.apple.MenuBarAgent",
+                   !SectionModel.ownIdentifiers.contains(application.bundleID),
+                   reader.failure == nil {
+                    let windowTitles = readOpenWindowTitles(from: element, reader: reader)
+                    if !windowTitles.isEmpty {
+                        for idx in appItems.indices {
+                            appItems[idx].openWindowTitles = windowTitles
+                        }
+                    }
                 }
                 ownerResults.record(owner: application.bundleID, .complete(appItems))
             } catch {
@@ -362,9 +376,10 @@ enum ItemEnumerator {
         return DisplayID(rawValue: number.uint32Value, localizedName: screen.localizedName)
     }
 
-    /// Triggers a status item owned by `bundleID` via Accessibility (`AXPress` / `AXShowMenu`).
+    /// Triggers a status item owned by `bundleID` via Accessibility (`AXPress` / `AXShowMenu`),
+    /// optionally targeting a specific `preferredIndex` for multi-icon applications.
     @discardableResult
-    static func pressStatusItem(bundleID: String) -> Bool {
+    static func pressStatusItem(bundleID: String, preferredIndex: Int? = nil) -> Bool {
         precondition(!Thread.isMainThread, "AX action must run off the main thread")
         guard hasAccessibilityPermission else { return false }
         let (pids, screens) = DispatchQueue.main.sync {
@@ -380,7 +395,15 @@ enum ItemEnumerator {
             let app = AXUIElementCreateApplication(pid)
             guard let extras = try? reader.element(app, "AXExtrasMenuBar"),
                   let children = try? reader.children(extras) else { continue }
-            for child in children {
+            let orderedChildren: [AXUIElement]
+            if let preferredIndex, children.indices.contains(preferredIndex) {
+                orderedChildren = [children[preferredIndex]] + children.enumerated()
+                    .filter { $0.offset != preferredIndex }
+                    .map(\.element)
+            } else {
+                orderedChildren = children
+            }
+            for child in orderedChildren {
                 if let rect = try? frame(of: child, reader: reader),
                    rect.width > 0, rect.height > 0,
                    display(containing: rect, in: screens) != nil {
@@ -846,7 +869,16 @@ enum ItemEnumerator {
             where code == AXError.noValue.rawValue || code == AXError.attributeUnsupported.rawValue {
             return RawAXItemTelemetry()
         }
-        for child in children.prefix(4) {
+        var collectedValues: [String] = []
+        var firstTitle: String?
+        var firstDesc: String?
+        for child in children.prefix(6) {
+            let role = try AXReadBudget.optionalMetadata {
+                try reader.string(child, kAXRoleAttribute as String)
+            }
+            if role == (kAXMenuRole as String) {
+                continue
+            }
             let t = try AXReadBudget.optionalMetadata {
                 try reader.string(child, kAXTitleAttribute as String)
             }
@@ -856,15 +888,45 @@ enum ItemEnumerator {
             let v = try AXReadBudget.optionalMetadata {
                 try reader.string(child, kAXValueAttribute as String)
             }
-            if (t?.isEmpty == false) || (d?.isEmpty == false) || (v?.isEmpty == false) {
-                return RawAXItemTelemetry(title: t, description: d, value: v, help: nil)
+            if firstTitle == nil, let t, !t.isEmpty { firstTitle = t }
+            if firstDesc == nil, let d, !d.isEmpty { firstDesc = d }
+            if let v, !v.isEmpty, !collectedValues.contains(v) {
+                collectedValues.append(v)
             }
-            let deeper = try nestedTelemetry(in: child, depth: depth + 1, reader: reader)
-            if (deeper.title?.isEmpty == false) || (deeper.description?.isEmpty == false) || (deeper.value?.isEmpty == false) {
-                return deeper
+            if firstTitle == nil && firstDesc == nil && collectedValues.isEmpty {
+                let deeper = try nestedTelemetry(in: child, depth: depth + 1, reader: reader)
+                if firstTitle == nil, let dt = deeper.title, !dt.isEmpty { firstTitle = dt }
+                if firstDesc == nil, let dd = deeper.description, !dd.isEmpty { firstDesc = dd }
+                if let dv = deeper.value, !dv.isEmpty, !collectedValues.contains(dv) {
+                    collectedValues.append(dv)
+                }
             }
         }
-        return RawAXItemTelemetry()
+        let joinedValue = collectedValues.isEmpty ? nil : collectedValues.joined(separator: " · ")
+        return RawAXItemTelemetry(title: firstTitle, description: firstDesc, value: joinedValue, help: nil)
+    }
+
+    private static func readOpenWindowTitles(from appElement: AXUIElement, reader: AXReadBudget) -> [String] {
+        guard reader.failure == nil,
+              let rawWins = try? reader.attribute(appElement, kAXWindowsAttribute as String, optional: true),
+              let wins = rawWins as? [AXUIElement], !wins.isEmpty else {
+            return []
+        }
+        var titles: [String] = []
+        for win in wins.prefix(4) {
+            guard reader.failure == nil else { break }
+            if let subrole = try? reader.string(win, kAXSubroleAttribute as String),
+               subrole == "AXSystemDialog" || subrole == "AXUnknown" {
+                continue
+            }
+            if let t = (try? reader.string(win, kAXTitleAttribute as String))?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !t.isEmpty {
+                titles.append(t)
+                if titles.count >= 3 { break }
+            }
+        }
+        return titles
     }
 
     static func displayMenuBarGeometries() -> [DisplayMenuBarGeometry] {
@@ -940,20 +1002,48 @@ enum ItemEnumerator {
                                          statusItemIndex: Int,
                                          reader: AXReadBudget) throws -> [AXMenuSnapshotEntry] {
         guard let subChildren = try AXReadBudget.optionalValue({ try reader.children(statusItem) }),
-              let firstChild = subChildren.first else {
+              !subChildren.isEmpty else {
             return []
         }
-        let role = try AXReadBudget.optionalMetadata {
-            try reader.string(firstChild, kAXRoleAttribute as String)
+        var rootMenu: AXUIElement?
+        for child in subChildren.prefix(4) {
+            let role = try AXReadBudget.optionalMetadata {
+                try reader.string(child, kAXRoleAttribute as String)
+            }
+            if role == (kAXMenuRole as String) {
+                rootMenu = child
+                break
+            }
         }
-        guard role == (kAXMenuRole as String) else { return [] }
-        guard let menuItems = try AXReadBudget.optionalValue({ try reader.children(firstChild) }),
+        guard let rootMenu else { return [] }
+        return try readMenuEntries(
+            from: rootMenu,
+            statusItemIndex: statusItemIndex,
+            parentIndexPath: [],
+            parentTitlePath: [],
+            depth: 0,
+            reader: reader
+        )
+    }
+
+    private static func readMenuEntries(from menuElement: AXUIElement,
+                                        statusItemIndex: Int,
+                                        parentIndexPath: [Int],
+                                        parentTitlePath: [String],
+                                        depth: Int,
+                                        reader: AXReadBudget) throws -> [AXMenuSnapshotEntry] {
+        guard reader.failure == nil else { return [] }
+        guard let menuItems = try AXReadBudget.optionalValue({ try reader.children(menuElement) }),
               !menuItems.isEmpty else {
             return []
         }
 
+        let scanLimit = (depth == 0) ? 20 : 16
+        let keepLimit = (depth == 0) ? 14 : 12
         var entries: [AXMenuSnapshotEntry] = []
-        for (menuIndex, itemElement) in menuItems.prefix(18).enumerated() {
+
+        for (menuIndex, itemElement) in menuItems.prefix(scanLimit).enumerated() {
+            guard reader.failure == nil else { break }
             let rawTitle = try AXReadBudget.optionalMetadata {
                 try reader.string(itemElement, kAXTitleAttribute as String)
             }
@@ -974,15 +1064,42 @@ enum ItemEnumerator {
                 try reader.int(itemElement, "AXMenuItemCmdModifiers")
             }
             let shortcut = formatMenuShortcut(cmdChar: cmdChar, modifiers: cmdMods)
+            let currentIndexPath = parentIndexPath + [menuIndex]
+            let currentTitlePath = parentTitlePath + [title]
+
+            var childEntries: [AXMenuSnapshotEntry] = []
+            if depth < 2,
+               let itemChildren = try AXReadBudget.optionalValue({ try reader.children(itemElement) }),
+               !itemChildren.isEmpty {
+                for sub in itemChildren.prefix(3) {
+                    let subRole = try AXReadBudget.optionalMetadata {
+                        try reader.string(sub, kAXRoleAttribute as String)
+                    }
+                    if subRole == (kAXMenuRole as String) {
+                        childEntries = try readMenuEntries(
+                            from: sub,
+                            statusItemIndex: statusItemIndex,
+                            parentIndexPath: currentIndexPath,
+                            parentTitlePath: currentTitlePath,
+                            depth: depth + 1,
+                            reader: reader
+                        )
+                        break
+                    }
+                }
+            }
+
             entries.append(AXMenuSnapshotEntry(
                 statusItemIndex: statusItemIndex,
-                menuIndex: menuIndex,
+                menuPath: currentIndexPath,
+                titlePath: currentTitlePath,
                 title: title,
                 isEnabled: enabled,
                 markChar: (mark?.isEmpty == false) ? mark : nil,
-                shortcutHint: shortcut
+                shortcutHint: shortcut,
+                children: childEntries
             ))
-            if entries.count >= 14 {
+            if entries.count >= keepLimit {
                 break
             }
         }
@@ -1038,22 +1155,61 @@ enum ItemEnumerator {
         return badges
     }
 
-    /// Invokes an `NSMenuItem` inside an application's status item `AXMenu` directly
-    /// via `kAXPressAction` without opening or flashing the top menu bar.
+    /// Invokes a root or nested `NSMenuItem` inside an application's status item `AXMenu`
+    /// directly via `kAXPressAction` / `AXPick` without opening or flashing the top menu bar.
     @discardableResult
     static func performTunneledMenuAction(bundleID: String,
                                           statusItemIndex: Int,
-                                          menuIndex: Int,
-                                          expectedTitle: String) -> Bool {
+                                          menuPath: [Int],
+                                          titlePath: [String]) -> Bool {
         precondition(!Thread.isMainThread, "AX action must run off the main thread")
-        guard hasAccessibilityPermission else { return false }
+        guard hasAccessibilityPermission, (!menuPath.isEmpty || !titlePath.isEmpty) else { return false }
         let pids: [pid_t] = DispatchQueue.main.sync {
             NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
                 .map(\.processIdentifier)
                 .filter { $0 > 0 }
         }
         guard !pids.isEmpty else { return false }
-        let reader = AXReadBudget(seconds: 1.0, cancellation: AXScanCancellation())
+        let reader = AXReadBudget(seconds: 1.2, cancellation: AXScanCancellation())
+        let depthCount = max(menuPath.count, titlePath.count)
+
+        func findChildMenu(in parent: AXUIElement) -> AXUIElement? {
+            guard let children = try? reader.children(parent) else { return nil }
+            for child in children.prefix(4) {
+                let role = try? reader.string(child, kAXRoleAttribute as String)
+                if role == (kAXMenuRole as String) {
+                    return child
+                }
+            }
+            return nil
+        }
+
+        func resolveMenuItem(in menu: AXUIElement, expectedTitle: String?, fallbackIndex: Int?) -> AXUIElement? {
+            guard let menuItems = try? reader.children(menu), !menuItems.isEmpty else { return nil }
+            if let expectedTitle, !expectedTitle.isEmpty {
+                if let exact = menuItems.first(where: { el in
+                    let t = (try? reader.string(el, kAXTitleAttribute as String))?
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    return t == expectedTitle
+                }) {
+                    return exact
+                }
+            }
+            if let fallbackIndex, menuItems.indices.contains(fallbackIndex) {
+                let candidate = menuItems[fallbackIndex]
+                if let expectedTitle, !expectedTitle.isEmpty {
+                    if let t = (try? reader.string(candidate, kAXTitleAttribute as String))?
+                        .trimmingCharacters(in: .whitespacesAndNewlines),
+                       !t.isEmpty,
+                       t.localizedCaseInsensitiveContains(String(expectedTitle.prefix(min(4, expectedTitle.count)))) {
+                        return candidate
+                    }
+                } else {
+                    return candidate
+                }
+            }
+            return nil
+        }
 
         for pid in pids {
             let app = AXUIElementCreateApplication(pid)
@@ -1070,33 +1226,75 @@ enum ItemEnumerator {
             }
 
             for idx in orderedIndices {
-                guard let subChildren = try? reader.children(statusItems[idx]),
-                      let menu = subChildren.first,
-                      let menuItems = try? reader.children(menu) else {
-                    continue
+                guard var currentMenu = findChildMenu(in: statusItems[idx]) else { continue }
+                var targetItem: AXUIElement?
+
+                for level in 0..<depthCount {
+                    let expected = (level < titlePath.count) ? titlePath[level] : nil
+                    let idxHint = (level < menuPath.count) ? menuPath[level] : nil
+                    guard let matched = resolveMenuItem(in: currentMenu, expectedTitle: expected, fallbackIndex: idxHint) else {
+                        targetItem = nil
+                        break
+                    }
+                    if level == depthCount - 1 {
+                        targetItem = matched
+                    } else {
+                        guard let nextMenu = findChildMenu(in: matched) else {
+                            targetItem = nil
+                            break
+                        }
+                        currentMenu = nextMenu
+                    }
                 }
-                // Match exact title first, then fall back to menuIndex if title still matches prefix.
-                if let exactMatch = menuItems.first(where: { el in
-                    let t = (try? reader.string(el, kAXTitleAttribute as String))?
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    return t == expectedTitle
-                }) {
-                    AXUIElementSetMessagingTimeout(exactMatch, 0.35)
-                    if AXUIElementPerformAction(exactMatch, kAXPressAction as CFString) == .success {
+
+                if let targetItem {
+                    AXUIElementSetMessagingTimeout(targetItem, 0.5)
+                    if AXUIElementPerformAction(targetItem, kAXPressAction as CFString) == .success {
+                        return true
+                    }
+                    if AXUIElementPerformAction(targetItem, "AXPick" as CFString) == .success {
                         return true
                     }
                 }
-                if menuItems.indices.contains(menuIndex) {
-                    let candidate = menuItems[menuIndex]
-                    if let t = (try? reader.string(candidate, kAXTitleAttribute as String))?
-                        .trimmingCharacters(in: .whitespacesAndNewlines),
-                       !t.isEmpty,
-                       t.localizedCaseInsensitiveContains(String(expectedTitle.prefix(4))) {
-                        AXUIElementSetMessagingTimeout(candidate, 0.35)
-                        if AXUIElementPerformAction(candidate, kAXPressAction as CFString) == .success {
-                            return true
-                        }
-                    }
+            }
+        }
+        return false
+    }
+
+    /// Raises and focuses a specific window (or the main window) of `bundleID` via Accessibility.
+    @discardableResult
+    static func raiseApplicationWindow(bundleID: String, matchingTitle: String? = nil) -> Bool {
+        precondition(!Thread.isMainThread, "AX action must run off the main thread")
+        guard hasAccessibilityPermission else { return false }
+        let pids: [pid_t] = DispatchQueue.main.sync {
+            NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+                .map(\.processIdentifier)
+                .filter { $0 > 0 }
+        }
+        guard !pids.isEmpty else { return false }
+        let reader = AXReadBudget(seconds: 0.9, cancellation: AXScanCancellation())
+        for pid in pids {
+            let app = AXUIElementCreateApplication(pid)
+            guard let rawWins = try? reader.attribute(app, kAXWindowsAttribute as String, optional: true),
+                  let wins = rawWins as? [AXUIElement], !wins.isEmpty else {
+                continue
+            }
+            let targetWin: AXUIElement?
+            if let matchingTitle, !matchingTitle.isEmpty {
+                targetWin = wins.first(where: { win in
+                    let t = (try? reader.string(win, kAXTitleAttribute as String))?
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    return t == matchingTitle || (t?.localizedCaseInsensitiveContains(matchingTitle) == true)
+                }) ?? wins.first
+            } else {
+                targetWin = wins.first
+            }
+            if let win = targetWin {
+                AXUIElementSetMessagingTimeout(win, 0.4)
+                _ = AXUIElementSetAttributeValue(win, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+                _ = AXUIElementSetAttributeValue(win, kAXMainAttribute as CFString, kCFBooleanTrue)
+                if AXUIElementPerformAction(win, kAXRaiseAction as CFString) == .success {
+                    return true
                 }
             }
         }

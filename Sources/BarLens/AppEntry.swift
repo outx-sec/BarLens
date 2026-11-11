@@ -124,6 +124,7 @@ struct AppInfo {
     let name: String
     let icon: NSImage?
     var monochromeIcon: NSImage? = nil
+    var categoryType: String? = nil
 }
 
 /// Builds the settings list away from the main thread.
@@ -223,9 +224,12 @@ enum AppCatalog {
         var labels: [String: [String]] = [:]
         var rawTelemetryByOwner: [String: [RawAXItemTelemetry]] = [:]
         var dockBadgeByOwner: [String: String] = [:]
+        var openWindowsByOwner: [String: [String]] = [:]
         for item in discovered {
             rawTelemetryByOwner[item.ownerBundleID, default: []].append(
                 RawAXItemTelemetry(
+                    indexInApp: item.indexInApp,
+                    identifier: item.axIdentifier,
                     title: item.axTitle ?? item.label,
                     description: item.axDescription,
                     value: item.axValue,
@@ -235,6 +239,9 @@ enum AppCatalog {
             )
             if let badge = item.dockBadge, !badge.isEmpty {
                 dockBadgeByOwner[item.ownerBundleID] = badge
+            }
+            if !item.openWindowTitles.isEmpty {
+                openWindowsByOwner[item.ownerBundleID] = item.openWindowTitles
             }
             // Digits are state, not identity: WeChat publishes its unread count
             // as its title, and a count in a list of names is noise that changes
@@ -262,9 +269,13 @@ enum AppCatalog {
                     bundleURL: app?.bundleURL,
                     appIcon: rawIcon
                 )
+                let catType = app?.bundleURL
+                    .flatMap(Bundle.init(url:))?
+                    .infoDictionary?["LSApplicationCategoryType"] as? String
                 details = AppInfo(name: app?.localizedName ?? bundleID,
                                   icon: rawIcon,
-                                  monochromeIcon: monoIcon)
+                                  monochromeIcon: monoIcon,
+                                  categoryType: catType)
                 info[bundleID] = details
             }
             let extractedTelemetry = (app != nil)
@@ -272,7 +283,9 @@ enum AppCatalog {
                     appName: details.name,
                     bundleID: bundleID,
                     items: rawTelemetryByOwner[bundleID] ?? [],
-                    dockBadge: dockBadgeByOwner[bundleID]
+                    dockBadge: dockBadgeByOwner[bundleID],
+                    categoryType: details.categoryType,
+                    openWindows: openWindowsByOwner[bundleID] ?? []
                 )
                 : .empty
             let sampledVitals = app.flatMap { ProcessVitalsReader.shared.vitals(forPID: $0.processIdentifier) }

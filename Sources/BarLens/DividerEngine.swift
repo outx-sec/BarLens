@@ -1199,7 +1199,7 @@ final class DividerEngine: ObservableObject {
 
     /// Temporarily admits a single hidden app onto the top menu bar and triggers
     /// its native status bar item via AX, or collapses it if already open.
-    func activateFromFloatingBar(bundleID: String) {
+    func activateFromFloatingBar(bundleID: String, preferredIndex: Int? = nil) {
         pinnedExpireWork?.cancel()
         popupWatchWork?.cancel()
         pressGeneration += 1
@@ -1213,7 +1213,7 @@ final class DividerEngine: ObservableObject {
             || (clickedRecently && pids.contains { openPopupPIDsAtMouseDown.contains($0) })
             || (lastActivatedTargetID == targetID && Date().timeIntervalSince(lastPopupObservedOpenAt) < 0.45)
 
-        if pinnedBundleID == bundleID || appPopupOpenAtClick {
+        if preferredIndex == nil && (pinnedBundleID == bundleID || appPopupOpenAtClick) {
             lastActivatedTargetID = nil
             lastActivatedFromFloatingBar = false
             lastPopupObservedOpenAt = .distantPast
@@ -1245,7 +1245,7 @@ final class DividerEngine: ObservableObject {
         scheduleAutoRehideIfNeeded()
 
         retryPressMenuBarItem(generation: generation, initialDelay: 0.15, attemptsLeft: 6) {
-            ItemEnumerator.pressStatusItem(bundleID: bundleID)
+            ItemEnumerator.pressStatusItem(bundleID: bundleID, preferredIndex: preferredIndex)
         }
         startPopupWatch(for: targetID)
         schedulePinnedExpiration(after: max(8, autoRehideInterval.seconds ?? 8))
@@ -1656,36 +1656,75 @@ final class DividerEngine: ObservableObject {
         systemTelemetryRevision &+= 1
     }
 
-    /// Executes an `AXMenu` sub-item directly without touching or flashing the top menu bar,
-    /// falling back to opening the status item menu if the target app dynamically rebuilt its menu.
+    /// Executes a root or nested `AXMenu` sub-item directly without touching or flashing the top menu bar,
+    /// granting cooperative window activation when opening app/settings windows, and falling back to
+    /// opening the status item menu if the target app dynamically rebuilt its menu.
     func performTunnelAction(_ action: LensTunnelAction, bundleID: String, collapseBarAfter: Bool = true) {
+        guard action.isEnabled, !action.hasSubmenu else { return }
         recordItemInteraction(bundleID: bundleID)
+        let targetApp = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first
+        if let targetApp {
+            NSApp?.yieldActivation(to: targetApp)
+        }
+        let shouldActivateTargetWindow = Self.actionLikelyOpensWindow(action.title)
         itemScanQueue.async { [weak self] in
             let ok = ItemEnumerator.performTunneledMenuAction(
                 bundleID: bundleID,
                 statusItemIndex: action.statusItemIndex,
-                menuIndex: action.menuIndex,
-                expectedTitle: action.title
+                menuPath: action.menuPath,
+                titlePath: action.titlePath
             )
             DispatchQueue.main.async {
                 guard let self else { return }
                 if ok {
+                    if shouldActivateTargetWindow, let targetApp {
+                        targetApp.activate()
+                    }
                     if collapseBarAfter {
                         self.setReveal(.none)
                     } else {
                         self.refreshRunningApplications()
                     }
                 } else {
-                    self.activateFromFloatingBar(bundleID: bundleID)
+                    self.activateFromFloatingBar(bundleID: bundleID, preferredIndex: action.statusItemIndex)
                 }
             }
         }
+    }
+
+    private static func actionLikelyOpensWindow(_ title: String) -> Bool {
+        let lower = title.lowercased()
+        let markers = [
+            "open", "打开", "show", "显示", "settings", "preferences",
+            "设置", "首选项", "偏好", "window", "窗口", "dashboard", "面板", "控制台", "new ", "新建"
+        ]
+        return markers.contains { lower.contains($0) }
+    }
+
+    /// Raises a specific window of `bundleID` via Accessibility and brings the app to the front.
+    func focusApplicationWindow(bundleID: String, windowTitle: String) {
+        recordItemInteraction(bundleID: bundleID)
+        let targetApp = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first
+        if let targetApp {
+            NSApp?.yieldActivation(to: targetApp)
+        }
+        itemScanQueue.async {
+            _ = ItemEnumerator.raiseApplicationWindow(bundleID: bundleID, matchingTitle: windowTitle)
+            DispatchQueue.main.async {
+                targetApp?.activate()
+            }
+        }
+        setReveal(.none)
     }
 
     /// Brings the target application's windows to the front (or reopens its main window).
     func activateApplicationWindow(bundleID: String) {
         recordItemInteraction(bundleID: bundleID)
         if let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first {
+            NSApp?.yieldActivation(to: app)
+            itemScanQueue.async {
+                _ = ItemEnumerator.raiseApplicationWindow(bundleID: bundleID, matchingTitle: nil)
+            }
             if let url = app.bundleURL {
                 let config = NSWorkspace.OpenConfiguration()
                 config.activates = true

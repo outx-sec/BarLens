@@ -10,44 +10,73 @@ import IOKit
 import IOKit.ps
 import SystemConfiguration
 
-/// Snapshot of a single `AXMenuItem` inside a status item's attached `AXMenu`.
-/// Read passively without opening or flashing the menu.
+/// Recursive snapshot of an `AXMenuItem` (and any nested child `AXMenu`) inside a status item's menu.
+/// Read passively via Accessibility without opening or flashing the menu.
 struct AXMenuSnapshotEntry: Equatable, Hashable {
     let statusItemIndex: Int
-    let menuIndex: Int
+    let menuPath: [Int]
+    let titlePath: [String]
     let title: String
     let isEnabled: Bool
     let markChar: String?
     let shortcutHint: String?
+    let children: [AXMenuSnapshotEntry]
 
     init(statusItemIndex: Int = 0,
          menuIndex: Int,
          title: String,
          isEnabled: Bool,
          markChar: String? = nil,
-         shortcutHint: String? = nil) {
+         shortcutHint: String? = nil,
+         children: [AXMenuSnapshotEntry] = []) {
         self.statusItemIndex = statusItemIndex
-        self.menuIndex = menuIndex
+        self.menuPath = [menuIndex]
+        self.titlePath = [title]
         self.title = title
         self.isEnabled = isEnabled
         self.markChar = markChar
         self.shortcutHint = shortcutHint
+        self.children = children
+    }
+
+    init(statusItemIndex: Int = 0,
+         menuPath: [Int],
+         titlePath: [String],
+         title: String,
+         isEnabled: Bool,
+         markChar: String? = nil,
+         shortcutHint: String? = nil,
+         children: [AXMenuSnapshotEntry] = []) {
+        self.statusItemIndex = statusItemIndex
+        self.menuPath = menuPath
+        self.titlePath = titlePath
+        self.title = title
+        self.isEnabled = isEnabled
+        self.markChar = markChar
+        self.shortcutHint = shortcutHint
+        self.children = children
     }
 }
 
-/// Raw Accessibility strings and menu entries observed on a single status item element.
+/// Raw Accessibility strings, identifier, and nested menu entries observed on a single status item element.
 struct RawAXItemTelemetry: Equatable, Hashable {
+    var indexInApp: Int
+    var identifier: String?
     var title: String?
     var description: String?
     var value: String?
     var help: String?
     var menuEntries: [AXMenuSnapshotEntry]
 
-    init(title: String? = nil,
+    init(indexInApp: Int = 0,
+         identifier: String? = nil,
+         title: String? = nil,
          description: String? = nil,
          value: String? = nil,
          help: String? = nil,
          menuEntries: [AXMenuSnapshotEntry] = []) {
+        self.indexInApp = indexInApp
+        self.identifier = identifier
         self.title = title
         self.description = description
         self.value = value
@@ -77,26 +106,47 @@ struct LensFactRow: Equatable, Hashable, Identifiable {
     }
 }
 
-/// Direct 1-click submenu action tunneled via `AXPress` without revealing or opening the top menu bar.
+/// Direct or hierarchical submenu item executable via `AXPress` (or expandable on hover when `hasSubmenu`).
 struct LensTunnelAction: Equatable, Hashable, Identifiable {
-    var id: String { "\(statusItemIndex):\(menuIndex):\(title)" }
+    var id: String {
+        let pathKey = menuPath.map(String.init).joined(separator: ".")
+        return "\(statusItemIndex):\(pathKey):\(title)"
+    }
     let statusItemIndex: Int
-    let menuIndex: Int
+    let menuPath: [Int]
+    let titlePath: [String]
     let title: String
+    let isEnabled: Bool
     let isChecked: Bool
     let shortcutHint: String?
+    let children: [LensTunnelAction]
+
+    var hasSubmenu: Bool { !children.isEmpty }
 
     init(statusItemIndex: Int = 0,
-         menuIndex: Int,
+         menuPath: [Int],
+         titlePath: [String],
          title: String,
+         isEnabled: Bool = true,
          isChecked: Bool = false,
-         shortcutHint: String? = nil) {
+         shortcutHint: String? = nil,
+         children: [LensTunnelAction] = []) {
         self.statusItemIndex = statusItemIndex
-        self.menuIndex = menuIndex
+        self.menuPath = menuPath
+        self.titlePath = titlePath
         self.title = title
+        self.isEnabled = isEnabled
         self.isChecked = isChecked
         self.shortcutHint = shortcutHint
+        self.children = children
     }
+}
+
+/// Individual status item target when a single app owns multiple menu bar icons (e.g. iStat Menus, Stats).
+struct StatusSubItemOption: Equatable, Hashable, Identifiable {
+    var id: Int { indexInApp }
+    let indexInApp: Int
+    let title: String
 }
 
 /// Live process footprint and CPU activity sampled via `proc_pid_rusage`.
@@ -155,21 +205,18 @@ enum LensInteractiveControl: Equatable, Hashable {
     case networkInfo(localIPv4: String?, gatewayIPv4: String?, interfaceName: String?)
     case inputSources(sources: [KeyboardInputSourceOption])
     case stageManager(isEnabled: Bool)
+    case mediaPlayback(nowPlayingHint: String?)
 }
 
 /// Distilled, zero-screen-recording live state & direct actions surfaced by BarLens's Optical Lens.
 struct LensTelemetry: Equatable, Hashable {
-    /// Positive unread or activity counter extracted from status item title or Dock badge (e.g. "1", "4", "99+").
     let unreadBadge: String?
-    /// Compact single-clause telemetry token for inline row chips (<= 26 chars).
     let shortChip: String?
-    /// Single-line telemetry summary for menus / search matching (<= 96 chars).
     let fullSummary: String?
-    /// Structured untruncated status rows for the Optical Loupe card.
     let rows: [LensFactRow]
-    /// Direct submenu actions executable via closed-menu `AXPress`.
     let tunnelActions: [LensTunnelAction]
-    /// Optional native interactive control module for built-in macOS system items.
+    let statusSubItems: [StatusSubItemOption]
+    let openWindowTitles: [String]
     let interactiveControl: LensInteractiveControl?
 
     init(unreadBadge: String? = nil,
@@ -177,12 +224,16 @@ struct LensTelemetry: Equatable, Hashable {
          fullSummary: String? = nil,
          rows: [LensFactRow] = [],
          tunnelActions: [LensTunnelAction] = [],
+         statusSubItems: [StatusSubItemOption] = [],
+         openWindowTitles: [String] = [],
          interactiveControl: LensInteractiveControl? = nil) {
         self.unreadBadge = unreadBadge
         self.shortChip = shortChip
         self.fullSummary = fullSummary
         self.rows = rows
         self.tunnelActions = tunnelActions
+        self.statusSubItems = statusSubItems
+        self.openWindowTitles = openWindowTitles
         self.interactiveControl = interactiveControl
     }
 
@@ -194,19 +245,27 @@ struct LensTelemetry: Equatable, Hashable {
             || fullSummary != nil
             || !rows.isEmpty
             || !tunnelActions.isEmpty
+            || !statusSubItems.isEmpty
+            || !openWindowTitles.isEmpty
             || interactiveControl != nil
     }
 }
 
-/// Pure, deterministic distiller that converts Accessibility attributes, passive `AXMenu`
-/// snapshots, and Dock unread badges into structured `LensTelemetry`.
+/// App-agnostic, zero-hardcoding distiller that converts Accessibility attributes,
+/// multi-level `AXMenu` hierarchies, multi-icon modules, `Info.plist` categories,
+/// `AXWindows` titles, and Dock badges into structured `LensTelemetry`.
 enum SemanticLensExtractor {
 
     static func extract(appName: String,
                         bundleID: String,
                         items: [RawAXItemTelemetry],
-                        dockBadge: String? = nil) -> LensTelemetry {
-        guard !items.isEmpty || dockBadge != nil else { return .empty }
+                        dockBadge: String? = nil,
+                        categoryType: String? = nil,
+                        openWindows: [String] = []) -> LensTelemetry {
+        let isMusicCategory = (categoryType == "public.app-category.music")
+        guard !items.isEmpty || dockBadge != nil || isMusicCategory || !openWindows.isEmpty else {
+            return .empty
+        }
 
         var numericCountTotal = 0
         var hasOverflowPlusBadge = false
@@ -253,7 +312,7 @@ enum SemanticLensExtractor {
             }
         }
 
-        // Extract live status rows & direct actions from passive AXMenu snapshots.
+        // Extract status rows & recursive cascading submenu actions from passive AXMenu trees.
         var primaryActions: [LensTunnelAction] = []
         var secondaryActions: [LensTunnelAction] = []
         var seenActionTitles: Set<String> = []
@@ -262,9 +321,9 @@ enum SemanticLensExtractor {
             for entry in item.menuEntries {
                 let title = collapseWhitespace(entry.title)
                 guard !title.isEmpty else { continue }
-                let isChecked = (entry.markChar == "✓" || entry.markChar == "✔" || entry.markChar == "•")
+                let isChecked = isMarked(entry.markChar)
 
-                if !entry.isEnabled {
+                if !entry.isEnabled && entry.children.isEmpty {
                     if !isPureVersionLine(title) {
                         appendClause(title, preferredTone: inferTone(forValue: title))
                     }
@@ -289,12 +348,23 @@ enum SemanticLensExtractor {
                 let actionKey = title.lowercased()
                 guard seenActionTitles.insert(actionKey).inserted else { continue }
 
+                let convertedChildren = entry.children.compactMap {
+                    convertSubmenuNode($0)
+                }
+                // Skip an empty submenu shell that cannot do anything itself.
+                if !entry.isEnabled && convertedChildren.isEmpty {
+                    continue
+                }
+
                 let action = LensTunnelAction(
                     statusItemIndex: entry.statusItemIndex,
-                    menuIndex: entry.menuIndex,
+                    menuPath: entry.menuPath,
+                    titlePath: entry.titlePath,
                     title: title,
+                    isEnabled: entry.isEnabled,
                     isChecked: isChecked,
-                    shortcutHint: entry.shortcutHint
+                    shortcutHint: entry.shortcutHint,
+                    children: convertedChildren
                 )
                 if isSecondaryPreferencesAction(title) {
                     secondaryActions.append(action)
@@ -304,9 +374,23 @@ enum SemanticLensExtractor {
             }
         }
 
-        let tunnelActions = Array((primaryActions + secondaryActions).prefix(5))
+        let tunnelActions = Array((primaryActions + secondaryActions).prefix(7))
 
-        // Fuse status item unread counter with Dock status badge (taking max when both report numbers).
+        // Multi-icon per-module buttons (e.g. iStat Menus Battery + Weather, Stats CPU + RAM).
+        let statusSubItems: [StatusSubItemOption]
+        if items.count > 1 {
+            statusSubItems = items.enumerated().map { offset, raw in
+                let label = resolveSubItemTitle(raw: raw, fallbackNumber: offset + 1, appName: appName)
+                return StatusSubItemOption(indexInApp: raw.indexInApp, title: label)
+            }
+        } else {
+            statusSubItems = []
+        }
+
+        // Distinct non-redundant open window titles (e.g. active song, conversation, or workspace).
+        let cleanWindows = filterWindowTitles(openWindows, appName: appName)
+
+        // Fuse status item unread counter with Dock status badge.
         if let dockParsed = parseDockBadge(dockBadge) {
             switch dockParsed {
             case .overflow:
@@ -333,9 +417,15 @@ enum SemanticLensExtractor {
             ))
         }
 
+        let interactiveControl: LensInteractiveControl? = isMusicCategory
+            ? .mediaPlayback(nowPlayingHint: cleanWindows.first)
+            : nil
+
         let shortChip: String?
         if let first = clauses.first {
             shortChip = truncate(compactClauseForChip(first), maxCount: 24)
+        } else if let firstWin = cleanWindows.first, isMusicCategory {
+            shortChip = truncate(firstWin, maxCount: 24)
         } else {
             shortChip = nil
         }
@@ -346,6 +436,8 @@ enum SemanticLensExtractor {
             fullSummary = truncate(joined, maxCount: 92)
         } else if let badge = unreadBadge {
             fullSummary = tr("\(badge) 条未读动态", "\(badge) active / unread")
+        } else if let firstWin = cleanWindows.first {
+            fullSummary = truncate(firstWin, maxCount: 72)
         } else {
             fullSummary = nil
         }
@@ -355,8 +447,74 @@ enum SemanticLensExtractor {
             shortChip: shortChip,
             fullSummary: fullSummary,
             rows: rows,
-            tunnelActions: tunnelActions
+            tunnelActions: tunnelActions,
+            statusSubItems: statusSubItems,
+            openWindowTitles: Array(cleanWindows.prefix(2)),
+            interactiveControl: interactiveControl
         )
+    }
+
+    private static func convertSubmenuNode(_ entry: AXMenuSnapshotEntry) -> LensTunnelAction? {
+        let title = collapseWhitespace(entry.title)
+        guard !title.isEmpty else { return nil }
+        let nested = entry.children.compactMap { convertSubmenuNode($0) }
+        return LensTunnelAction(
+            statusItemIndex: entry.statusItemIndex,
+            menuPath: entry.menuPath,
+            titlePath: entry.titlePath,
+            title: title,
+            isEnabled: entry.isEnabled,
+            isChecked: isMarked(entry.markChar),
+            shortcutHint: entry.shortcutHint,
+            children: nested
+        )
+    }
+
+    private static func isMarked(_ markChar: String?) -> Bool {
+        guard let markChar else { return false }
+        return markChar == "✓" || markChar == "✔" || markChar == "•"
+    }
+
+    private static func resolveSubItemTitle(raw: RawAXItemTelemetry,
+                                            fallbackNumber: Int,
+                                            appName: String) -> String {
+        let candidates = [raw.title, raw.description, raw.identifier]
+        for candidate in candidates {
+            guard var s = candidate?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else {
+                continue
+            }
+            if s.contains(".") {
+                s = s.split(separator: ".").last.map(String.init) ?? s
+            }
+            if s.lowercased().hasPrefix(appName.lowercased()) {
+                let stripped = String(s.dropFirst(appName.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !stripped.isEmpty { s = stripped }
+            }
+            let baseApp = appName.replacingOccurrences(of: " Menubar", with: "", options: .caseInsensitive)
+            if !baseApp.isEmpty, s.lowercased().hasPrefix(baseApp.lowercased()) {
+                let stripped = String(s.dropFirst(baseApp.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !stripped.isEmpty { s = stripped }
+            }
+            if !s.isEmpty {
+                return s.prefix(1).uppercased() + s.dropFirst()
+            }
+        }
+        return tr("图标 #\(fallbackNumber)", "Item #\(fallbackNumber)")
+    }
+
+    private static func filterWindowTitles(_ titles: [String], appName: String) -> [String] {
+        let appNorm = normalizeKey(appName)
+        var seen: Set<String> = []
+        var result: [String] = []
+        for raw in titles {
+            let trimmed = collapseWhitespace(raw)
+            guard trimmed.count >= 2 else { continue }
+            let norm = normalizeKey(trimmed)
+            guard norm != appNorm, seen.insert(norm).inserted else { continue }
+            if trimmed.lowercased() == "window" || trimmed.lowercased() == "item-0" { continue }
+            result.append(trimmed)
+        }
+        return result
     }
 
     // MARK: - Fact Row & Menu Parsing
@@ -386,7 +544,6 @@ enum SemanticLensExtractor {
     }
 
     private static func findKeyValueSeparator(in text: String) -> String.Index? {
-        // Avoid splitting time strings like "14:52" by requiring a non-digit before ':'.
         for idx in text.indices {
             let ch = text[idx]
             if ch == "：" { return idx }
@@ -441,7 +598,7 @@ enum SemanticLensExtractor {
             "quit", "退出", "about", "关于", "check for update", "检查更新",
             "support", "feedback", "反馈", "faq", "website", "访问网站", "官网",
             "rate app", "share app", "more apps", "help", "帮助", "services", "服务",
-            "hide ", "隐藏 " + appName.lowercased(), "show all", "全部显示"
+            "hide ", "隐藏 " + appName.lowercased(), "show all", "全部显示", "解锁专业版"
         ]
         if exactPrefixes.contains(where: { lower == $0 || lower.hasPrefix($0) }) {
             return true
@@ -686,6 +843,20 @@ final class ProcessVitalsReader {
 final class SystemTelemetryReader {
     static let shared = SystemTelemetryReader()
 
+    enum MediaCommand {
+        case previous
+        case playPause
+        case next
+
+        var nxKeyType: Int32 {
+            switch self {
+            case .playPause: return 16 // NX_KEYTYPE_PLAY
+            case .next:      return 17 // NX_KEYTYPE_NEXT
+            case .previous:  return 18 // NX_KEYTYPE_REWIND / PREVIOUS
+            }
+        }
+    }
+
     private struct CachedEntry {
         let timestamp: TimeInterval
         let telemetry: LensTelemetry
@@ -722,6 +893,28 @@ final class SystemTelemetryReader {
         }
     }
 
+    static func sendMediaCommand(_ command: MediaCommand) {
+        let keyType = command.nxKeyType
+        func post(keyDown: Bool) {
+            let flags = NSEvent.ModifierFlags(rawValue: keyDown ? 0xa00 : 0xb00)
+            let data1 = Int((keyType << 16) | ((keyDown ? 0xa : 0xb) << 8))
+            guard let ev = NSEvent.otherEvent(
+                with: .systemDefined,
+                location: .zero,
+                modifierFlags: flags,
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: 0,
+                context: nil,
+                subtype: 8,
+                data1: data1,
+                data2: -1
+            ) else { return }
+            ev.cgEvent?.post(tap: .cghidEventTap)
+        }
+        post(keyDown: true)
+        post(keyDown: false)
+    }
+
     func telemetry(for item: SystemItem, fallbackAX: LensTelemetry = .empty) -> LensTelemetry {
         let canonical = SystemItemName.canonicalIdentifier(for: item.identifier)
         let now = ProcessInfo.processInfo.systemUptime
@@ -752,6 +945,13 @@ final class SystemTelemetryReader {
             resolved = readScreenMirroringTelemetry()
         case "com.apple.menuextra.timemachine":
             resolved = readStorageAndBackupTelemetry(fallbackAX: fallbackAX)
+        case "com.apple.menuextra.nowplaying":
+            resolved = LensTelemetry(
+                shortChip: fallbackAX.shortChip,
+                fullSummary: fallbackAX.fullSummary ?? tr("系统媒体播放控制", "System Media Playback"),
+                rows: fallbackAX.rows,
+                interactiveControl: .mediaPlayback(nowPlayingHint: fallbackAX.shortChip)
+            )
         default:
             resolved = enrichGenericSystemItem(canonical: canonical, fallbackAX: fallbackAX)
         }
@@ -1195,7 +1395,6 @@ final class SystemTelemetryReader {
             }
         }
 
-        // Desktop Mac fallback: AC power + wireless peripheral batteries!
         rows.append(LensFactRow(
             label: tr("供电模式", "Power"),
             value: tr("外接交流电源", "AC Mains Power"),

@@ -160,7 +160,20 @@ final class SemanticLensTests: XCTestCase {
                     value: nil,
                     help: "ChatGPT",
                     menuEntries: [
-                        AXMenuSnapshotEntry(menuIndex: 0, title: "Computer Use", isEnabled: true),
+                        AXMenuSnapshotEntry(
+                            menuPath: [0],
+                            titlePath: ["Computer Use"],
+                            title: "Computer Use",
+                            isEnabled: true,
+                            children: [
+                                AXMenuSnapshotEntry(
+                                    menuPath: [0, 0],
+                                    titlePath: ["Computer Use", "No Active Sessions"],
+                                    title: "No Active Sessions",
+                                    isEnabled: false
+                                )
+                            ]
+                        ),
                         AXMenuSnapshotEntry(menuIndex: 2, title: "Running", isEnabled: false),
                         AXMenuSnapshotEntry(menuIndex: 3, title: "调研 InnerSec MCP Server 改造方案", isEnabled: true),
                         AXMenuSnapshotEntry(menuIndex: 5, title: "Quit ChatGPT", isEnabled: true),
@@ -175,6 +188,45 @@ final class SemanticLensTests: XCTestCase {
             "Computer Use",
             "调研 InnerSec MCP Server 改造方案",
         ])
+        XCTAssertTrue(chatGPT.tunnelActions[0].hasSubmenu)
+        XCTAssertEqual(chatGPT.tunnelActions[0].children.map(\.title), ["No Active Sessions"])
+        XCTAssertFalse(chatGPT.tunnelActions[0].children[0].isEnabled)
+        XCTAssertFalse(chatGPT.tunnelActions[1].hasSubmenu)
+    }
+
+    func testExtractsMultiIconModulesMusicTransportAndOpenWindows() {
+        let multiIconMonitor = SemanticLensExtractor.extract(
+            appName: "iStat Menus Menubar",
+            bundleID: "com.bjango.istatmenus.status",
+            items: [
+                RawAXItemTelemetry(
+                    indexInApp: 0,
+                    identifier: "com.bjango.istatmenus.battery",
+                    description: "iStat Menus Battery",
+                    value: "98%"
+                ),
+                RawAXItemTelemetry(
+                    indexInApp: 1,
+                    identifier: "com.bjango.istatmenus.weather",
+                    description: "iStat Menus Weather",
+                    value: "24°"
+                ),
+            ]
+        )
+        XCTAssertEqual(multiIconMonitor.statusSubItems, [
+            StatusSubItemOption(indexInApp: 0, title: "Battery"),
+            StatusSubItemOption(indexInApp: 1, title: "Weather"),
+        ])
+
+        let musicPlayer = SemanticLensExtractor.extract(
+            appName: "NetEaseMusic",
+            bundleID: "com.netease.163music",
+            items: [RawAXItemTelemetry(title: "NetEaseMusic")],
+            categoryType: "public.app-category.music",
+            openWindows: ["晴天 - 周杰伦", "NetEaseMusic"]
+        )
+        XCTAssertEqual(musicPlayer.openWindowTitles, ["晴天 - 周杰伦"])
+        XCTAssertEqual(musicPlayer.interactiveControl, .mediaPlayback(nowPlayingHint: "晴天 - 周杰伦"))
     }
 
     func testParsesKeyValueRowsAndFusesDockUnreadBadges() {
