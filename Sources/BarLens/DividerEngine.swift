@@ -46,6 +46,10 @@ final class DividerEngine: ObservableObject {
     @Published private(set) var glassOpacity = Defaults.glassOpacity
     @Published private(set) var rimIntensity = Defaults.rimIntensity
     @Published private(set) var lensTelemetryEnabled = Defaults.lensTelemetryEnabled
+    @Published private(set) var spatialBudgetPolicy = Defaults.spatialBudgetPolicy
+    @Published private(set) var spatialExemptBundleIDs = Defaults.spatialExemptBundleIDs
+    @Published private(set) var overflowDemotedBundleIDs: Set<String> = []
+    @Published private(set) var overflowDemotionReasons: [String: SpatialDemotionReason] = [:]
     @Published private(set) var pinnedBundleID: String?
     @Published private(set) var pinnedSystemItemRawValue: Int?
     /// Where an application goes before the user has classified it.
@@ -59,6 +63,14 @@ final class DividerEngine: ObservableObject {
     @Published private(set) var systemItemModes: [String: ControlCenterShowMode] = MenuBarBuiltIns.controlCenterModes()
     private var liveVisibleSystemItemIDs: Set<String> = []
     private var systemAXTelemetryByID: [String: LensTelemetry] = [:]
+    private var lastMeasuredWidthByBundleID: [String: CGFloat] = [:]
+    private var lastMeasuredMinXByBundleID: [String: CGFloat] = [:]
+    private var latestDisplayGeometries: [DisplayMenuBarGeometry] = []
+    private var latestFrontmostMenuWidth: CGFloat?
+    private var activeDotDisplayID: DisplayID?
+    private var fixedSystemBarWidth: CGFloat = 140
+    private var itemLastInteractedAt: [String: TimeInterval] = Defaults.itemLastInteractedAt
+    private var frontmostMenuCheckWork: DispatchWorkItem?
     private var distributedObserver: NSObjectProtocol?
     private var themeDistributedObserver: NSObjectProtocol?
     private var appearanceKVO: NSKeyValueObservation?
@@ -244,7 +256,8 @@ final class DividerEngine: ObservableObject {
     var visibleCount: Int { assignedCount(in: .visible) }
     var alwaysHiddenCount: Int { assignedCount(in: .alwaysHidden) }
     var revealableCount: Int { assignedCount(in: .hidden) }
-    var currentHiddenCount: Int { reveal == .none ? revealableCount : 0 }
+    var tuckedOverflowCount: Int { overflowDemotedBundleIDs.count }
+    var currentHiddenCount: Int { reveal == .none ? (revealableCount + tuckedOverflowCount) : 0 }
 
     /// Counts follow effective sections for items actually present on the menu bar.
     private func assignedCount(in section: SectionModel.Section) -> Int {
@@ -437,6 +450,7 @@ final class DividerEngine: ObservableObject {
                     self.retainedScanItems = keptItems + freshItems
                     self.latestScanItems = self.retainedScanItems
                     self.updateSystemAXTelemetry(from: result.items)
+                    self.updateSpatialMeasurements(context: context, result: result)
                 }
                 let disabledInSystem = MenuBarLedger.disabledBundleIDs()
                 self.hasSystemLedger = ledger != nil
@@ -514,6 +528,8 @@ final class DividerEngine: ObservableObject {
         pinnedExpireWork = nil
         popupWatchWork?.cancel()
         popupWatchWork = nil
+        frontmostMenuCheckWork?.cancel()
+        frontmostMenuCheckWork = nil
         if let localMouseDownMonitor {
             NSEvent.removeMonitor(localMouseDownMonitor)
             self.localMouseDownMonitor = nil
@@ -598,7 +614,11 @@ final class DividerEngine: ObservableObject {
             }
         }
         observe(.default, NSApplication.didChangeScreenParametersNotification) { [weak self] in
+            self?.latestDisplayGeometries = ItemEnumerator.displayMenuBarGeometries()
             self?.scheduleRecovery(reason: tr("显示器变化", "Display change"))
+        }
+        observe(workspace, NSWorkspace.didActivateApplicationNotification) { [weak self] in
+            self?.scheduleFrontmostMenuCheck()
         }
         if let distributedObserver {
             DistributedNotificationCenter.default().removeObserver(distributedObserver)
@@ -915,10 +935,12 @@ final class DividerEngine: ObservableObject {
             return
         }
 
-        // With nothing assigned there is nothing to hide, and re-acquiring on
-        // every launch churns the bar for no reason. Stay suspended until there
-        // is actually something to hide.
-        guard isConfigured else {
+        if runningBundleIDs.isEmpty { refreshRunningApplications() }
+        recomputeSpatialBudget()
+
+        // With nothing assigned and no spatial overflow to protect, stay suspended
+        // until there is actually something to hide.
+        guard isConfigured || !overflowDemotedBundleIDs.isEmpty else {
             send(AgentCommand(mode: .suspend, allowed: []))
             return
         }
@@ -929,12 +951,14 @@ final class DividerEngine: ObservableObject {
         // complete superset — and it needs no access to any private plist.
         // A newly launched app has to be admitted, or its icon would stay
         // hidden until something else triggered an apply.
-        if runningBundleIDs.isEmpty { refreshRunningApplications() }
         let barReveal: SectionModel.Reveal = (revealPresentationStyle == .floatingBar) ? .none : reveal
         var allowed = model.allowedBundles(running: runningBundleIDs,
                                            reveal: barReveal,
                                            alwaysHiddenEnabled: alwaysHiddenEnabled,
                                            listable: bundlesWithItems)
+        if barReveal == .none, !overflowDemotedBundleIDs.isEmpty {
+            allowed.removeAll { overflowDemotedBundleIDs.contains($0) }
+        }
         for item in systemItems.items where !item.hostBundleIDs.isEmpty {
             let suppressed = systemItems.isItemSuppressedOnBar(
                 item,
@@ -1101,6 +1125,8 @@ final class DividerEngine: ObservableObject {
         pinnedExpireWork = nil
         popupWatchWork?.cancel()
         popupWatchWork = nil
+        frontmostMenuCheckWork?.cancel()
+        frontmostMenuCheckWork = nil
         pinnedBundleID = nil
         pinnedSystemItemRawValue = nil
         apply()
@@ -1202,6 +1228,7 @@ final class DividerEngine: ObservableObject {
             }
         }
 
+        recordItemInteraction(bundleID: bundleID)
         pinnedBundleID = bundleID
         pinnedSystemItemRawValue = nil
         lastActivatedTargetID = targetID
@@ -1452,6 +1479,165 @@ final class DividerEngine: ObservableObject {
         onChange?()
     }
 
+    func setSpatialBudgetPolicy(_ policy: SpatialBudgetPolicy) {
+        guard spatialBudgetPolicy != policy else { return }
+        spatialBudgetPolicy = policy
+        Defaults.spatialBudgetPolicy = policy
+        if latestDisplayGeometries.isEmpty {
+            latestDisplayGeometries = ItemEnumerator.displayMenuBarGeometries()
+        }
+        apply()
+        catalogRevision += 1
+        onChange?()
+    }
+
+    func isSpatiallyExempt(_ bundleID: String) -> Bool {
+        spatialExemptBundleIDs.contains(bundleID)
+    }
+
+    func toggleSpatialExemption(for bundleID: String) {
+        if spatialExemptBundleIDs.contains(bundleID) {
+            spatialExemptBundleIDs.remove(bundleID)
+        } else {
+            spatialExemptBundleIDs.insert(bundleID)
+        }
+        Defaults.spatialExemptBundleIDs = spatialExemptBundleIDs
+        apply()
+        catalogRevision += 1
+        onChange?()
+    }
+
+    func recordItemInteraction(bundleID: String) {
+        let now = Date().timeIntervalSince1970
+        itemLastInteractedAt[bundleID] = now
+        if itemLastInteractedAt.count > 120 {
+            let sorted = itemLastInteractedAt.sorted { $0.value > $1.value }.prefix(96)
+            itemLastInteractedAt = Dictionary(uniqueKeysWithValues: sorted.map { ($0.key, $0.value) })
+        }
+        Defaults.itemLastInteractedAt = itemLastInteractedAt
+    }
+
+    private func updateSpatialMeasurements(context: ItemScanContext, result: ItemScanResult) {
+        if !context.menuBarGeometries.isEmpty {
+            latestDisplayGeometries = context.menuBarGeometries
+        }
+        if let menuWidth = result.frontmostMenuBarWidth {
+            latestFrontmostMenuWidth = menuWidth
+        }
+        if let dotItem = result.items.first(where: { $0.axIdentifier == "BarLens.dot" }) {
+            activeDotDisplayID = dotItem.display
+        } else if activeDotDisplayID == nil {
+            activeDotDisplayID = latestDisplayGeometries.first?.displayID
+        }
+
+        let targetDisplay = activeDotDisplayID ?? result.items.first?.display
+        let displayItems = targetDisplay.map { d in result.items.filter { $0.display == d } } ?? result.items
+        var widthsByOwner: [String: CGFloat] = [:]
+        var minXByOwner: [String: CGFloat] = [:]
+        var fixedOverhead: CGFloat = 0
+
+        for item in displayItems {
+            let w = max(18, item.frame.width) + 4
+            if SectionModel.ownIdentifiers.contains(item.ownerBundleID)
+                || SectionModel.notClassifiable.contains(item.ownerBundleID) {
+                fixedOverhead += w
+            } else {
+                widthsByOwner[item.ownerBundleID, default: 0] += w
+                if let currentMin = minXByOwner[item.ownerBundleID] {
+                    minXByOwner[item.ownerBundleID] = min(currentMin, item.frame.minX)
+                } else {
+                    minXByOwner[item.ownerBundleID] = item.frame.minX
+                }
+            }
+        }
+
+        for (owner, w) in widthsByOwner where w > 0 {
+            lastMeasuredWidthByBundleID[owner] = w
+        }
+        for (owner, x) in minXByOwner {
+            lastMeasuredMinXByBundleID[owner] = x
+        }
+        if result.completedOwners.contains("com.apple.MenuBarAgent"), fixedOverhead > 0 {
+            fixedSystemBarWidth = max(72, fixedOverhead)
+        }
+    }
+
+    private func recomputeSpatialBudget() {
+        if spatialBudgetPolicy == .off {
+            if !overflowDemotedBundleIDs.isEmpty || !overflowDemotionReasons.isEmpty {
+                overflowDemotedBundleIDs = []
+                overflowDemotionReasons = [:]
+            }
+            return
+        }
+
+        if latestDisplayGeometries.isEmpty {
+            latestDisplayGeometries = ItemEnumerator.displayMenuBarGeometries()
+        }
+
+        let eligibleOwners = bundlesWithItems
+            .subtracting(SectionModel.ownIdentifiers)
+            .subtracting(SectionModel.notClassifiable)
+            .intersection(runningBundleIDs)
+            .filter { model.section(of: $0) == .visible }
+
+        let candidates = eligibleOwners.map { bundleID in
+            SpatialCandidate(
+                bundleID: bundleID,
+                estimatedWidth: lastMeasuredWidthByBundleID[bundleID] ?? SpatialBudgetPlanner.defaultItemWidth,
+                isExempt: spatialExemptBundleIDs.contains(bundleID),
+                isExplicitlyVisible: model.visible.contains(bundleID),
+                lastInteractedAt: itemLastInteractedAt[bundleID] ?? 0,
+                menuBarMinX: lastMeasuredMinXByBundleID[bundleID]
+            )
+        }
+
+        let targetGeo = latestDisplayGeometries.first(where: { $0.displayID == activeDotDisplayID })
+            ?? latestDisplayGeometries.first
+        let availableWidth = targetGeo?.availableRightWidth(frontmostMenuWidth: latestFrontmostMenuWidth)
+
+        let evaluation = SpatialBudgetPlanner.evaluate(
+            policy: spatialBudgetPolicy,
+            candidates: candidates,
+            fixedOverheadWidth: fixedSystemBarWidth,
+            availableRightWidth: availableWidth,
+            previouslyDemoted: overflowDemotedBundleIDs
+        )
+
+        if evaluation.demotedBundleIDs != overflowDemotedBundleIDs
+            || evaluation.reasonsByBundleID != overflowDemotionReasons {
+            overflowDemotedBundleIDs = evaluation.demotedBundleIDs
+            overflowDemotionReasons = evaluation.reasonsByBundleID
+        }
+    }
+
+    private func scheduleFrontmostMenuCheck() {
+        guard isStarted, !isSleeping, spatialBudgetPolicy != .off else { return }
+        frontmostMenuCheckWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.isStarted, !self.isSleeping else { return }
+            guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier, pid > 0 else { return }
+            self.itemScanQueue.async { [weak self] in
+                let measured = ItemEnumerator.measureFrontmostMenuBarWidth(pid: pid)
+                DispatchQueue.main.async {
+                    guard let self, self.isStarted, !self.isSleeping else { return }
+                    let oldDemoted = self.overflowDemotedBundleIDs
+                    if let measured {
+                        self.latestFrontmostMenuWidth = measured
+                    }
+                    self.recomputeSpatialBudget()
+                    if self.overflowDemotedBundleIDs != oldDemoted {
+                        self.apply()
+                        self.catalogRevision += 1
+                        self.onChange?()
+                    }
+                }
+            }
+        }
+        frontmostMenuCheckWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+    }
+
     func telemetry(for systemItem: SystemItem) -> LensTelemetry {
         guard lensTelemetryEnabled else { return .empty }
         let canonical = SystemItemName.canonicalIdentifier(for: systemItem.identifier)
@@ -1557,7 +1743,9 @@ final class DividerEngine: ObservableObject {
             hoverRevealDelay: hoverRevealDelay.rawValue,
             appLanguage: appLanguage.rawValue,
             hotkeys: hotkeysRaw,
-            lensTelemetryEnabled: lensTelemetryEnabled
+            lensTelemetryEnabled: lensTelemetryEnabled,
+            spatialBudgetPolicy: spatialBudgetPolicy.rawValue,
+            spatialExemptBundles: Array(spatialExemptBundleIDs).sorted()
         )
     }
 
@@ -1614,6 +1802,15 @@ final class DividerEngine: ObservableObject {
         }
         if let lensEnabled = profile.lensTelemetryEnabled {
             setLensTelemetryEnabled(lensEnabled)
+        }
+        if let rawSpatial = profile.spatialBudgetPolicy,
+           let policy = SpatialBudgetPolicy(rawValue: rawSpatial) {
+            spatialBudgetPolicy = policy
+            Defaults.spatialBudgetPolicy = policy
+        }
+        if let exempt = profile.spatialExemptBundles {
+            spatialExemptBundleIDs = Set(exempt)
+            Defaults.spatialExemptBundleIDs = spatialExemptBundleIDs
         }
 
         var newBindings: [HotkeyAction: Hotkey] = [:]

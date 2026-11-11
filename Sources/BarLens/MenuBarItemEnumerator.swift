@@ -58,6 +58,8 @@ struct ItemScanContext {
     let applications: [ItemScanApplication]
     let screens: [(DisplayID, CGRect)]
     let permissionGranted: Bool
+    var frontmostPID: pid_t? = nil
+    var menuBarGeometries: [DisplayMenuBarGeometry] = []
 }
 
 struct ItemScanResult {
@@ -65,6 +67,7 @@ struct ItemScanResult {
     var failedOwners: Set<String> = []
     var completedOwners: Set<String> = []
     var visibleSystemItems: Set<String> = []
+    var frontmostMenuBarWidth: CGFloat? = nil
     var timedOut = false
     var cancelled = false
     var permissionGranted = true
@@ -149,10 +152,17 @@ enum ItemEnumerator {
     /// queue. Only the potentially blocking AX messages run on workers.
     static func captureContext() -> ItemScanContext {
         if !Thread.isMainThread { return DispatchQueue.main.sync { captureContext() } }
-        return ItemScanContext(applications: NSWorkspace.shared.runningApplications.compactMap {
-            guard $0.processIdentifier > 0, let bundleID = $0.bundleIdentifier else { return nil }
-            return ItemScanApplication(pid: $0.processIdentifier, bundleID: bundleID)
-        }, screens: displayFrames(), permissionGranted: hasAccessibilityPermission)
+        let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        return ItemScanContext(
+            applications: NSWorkspace.shared.runningApplications.compactMap {
+                guard $0.processIdentifier > 0, let bundleID = $0.bundleIdentifier else { return nil }
+                return ItemScanApplication(pid: $0.processIdentifier, bundleID: bundleID)
+            },
+            screens: displayFrames(),
+            permissionGranted: hasAccessibilityPermission,
+            frontmostPID: (frontPID ?? 0) > 0 ? frontPID : nil,
+            menuBarGeometries: displayMenuBarGeometries()
+        )
     }
 
     /// Used by the catalog's background queue. Operation owners should prefer
@@ -296,6 +306,13 @@ enum ItemEnumerator {
         result.unobservedOwners = merged.unobservedOwners
         if merged.completedOwners.contains("com.apple.MenuBarAgent") {
             result.visibleSystemItems = scannedSystemItems
+        }
+        if reader.failure == nil, let frontPID = context.frontmostPID {
+            result.frontmostMenuBarWidth = measureMenuBarWidth(
+                pid: frontPID,
+                screens: context.screens,
+                reader: reader
+            )
         }
         if let failure = reader.failure {
             result.timedOut = failure == .timedOut
@@ -826,6 +843,54 @@ enum ItemEnumerator {
             }
         }
         return RawAXItemTelemetry()
+    }
+
+    static func displayMenuBarGeometries() -> [DisplayMenuBarGeometry] {
+        if !Thread.isMainThread { return DispatchQueue.main.sync { displayMenuBarGeometries() } }
+        return NSScreen.screens.compactMap { screen in
+            guard let id = displayID(for: screen) else { return nil }
+            let cocoa = screen.frame
+            let auxRight = screen.auxiliaryTopRightArea
+            return DisplayMenuBarGeometry(
+                displayID: id,
+                screenMinX: cocoa.minX,
+                screenMaxX: cocoa.maxX,
+                auxiliaryTopRightMinX: auxRight?.minX,
+                auxiliaryTopRightMaxX: auxRight?.maxX
+            )
+        }
+    }
+
+    static func measureFrontmostMenuBarWidth(pid: pid_t) -> CGFloat? {
+        precondition(!Thread.isMainThread, "AX menu bar measurement must run off the main thread")
+        guard hasAccessibilityPermission, pid > 0 else { return nil }
+        let screens = DispatchQueue.main.sync { displayFrames() }
+        let reader = AXReadBudget(seconds: 0.35, cancellation: AXScanCancellation())
+        return measureMenuBarWidth(pid: pid, screens: screens, reader: reader)
+    }
+
+    private static func measureMenuBarWidth(pid: pid_t,
+                                            screens: [(DisplayID, CGRect)],
+                                            reader: AXReadBudget) -> CGFloat? {
+        let app = AXUIElementCreateApplication(pid)
+        guard let menuBar = try? reader.element(app, kAXMenuBarAttribute as String),
+              let children = try? reader.children(menuBar),
+              !children.isEmpty else {
+            return nil
+        }
+        var maxOffsetFromLeft: CGFloat = 0
+        for child in children.prefix(24) {
+            guard let rect = try? frame(of: child, reader: reader),
+                  rect.width > 0, rect.height > 0 else { continue }
+            let midX = rect.midX
+            if let hostingScreen = screens.first(where: { midX >= $0.1.minX - 4 && midX <= $0.1.maxX + 4 }) {
+                let offset = rect.maxX - hostingScreen.1.minX
+                if offset > maxOffsetFromLeft && offset < hostingScreen.1.width {
+                    maxOffsetFromLeft = offset
+                }
+            }
+        }
+        return maxOffsetFromLeft > 40 ? maxOffsetFromLeft : nil
     }
 
     private static func displayFrames() -> [(DisplayID, CGRect)] {

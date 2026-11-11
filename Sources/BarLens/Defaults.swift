@@ -315,6 +315,9 @@ enum Defaults {
         static let unclassifiedSection = "unclassifiedSection"
         static let newSystemItemSection = "newSystemItemSection"
         static let lensTelemetryEnabled = "lensTelemetryEnabled"
+        static let spatialBudgetPolicy = "spatialBudgetPolicy"
+        static let spatialExemptBundleIDs = "spatialExemptBundleIDs"
+        static let itemLastInteractedAt = "itemLastInteractedAt"
     }
 
     static var lensTelemetryEnabled: Bool {
@@ -323,6 +326,34 @@ enum Defaults {
         }
         set {
             UserDefaults.standard.set(newValue, forKey: Key.lensTelemetryEnabled)
+        }
+    }
+
+    static var spatialBudgetPolicy: SpatialBudgetPolicy {
+        get {
+            UserDefaults.standard.string(forKey: Key.spatialBudgetPolicy)
+                .flatMap(SpatialBudgetPolicy.init(rawValue:)) ?? .notchGuard
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: Key.spatialBudgetPolicy)
+        }
+    }
+
+    static var spatialExemptBundleIDs: Set<String> {
+        get {
+            Set(UserDefaults.standard.stringArray(forKey: Key.spatialExemptBundleIDs) ?? [])
+        }
+        set {
+            UserDefaults.standard.set(Array(newValue).sorted(), forKey: Key.spatialExemptBundleIDs)
+        }
+    }
+
+    static var itemLastInteractedAt: [String: TimeInterval] {
+        get {
+            (UserDefaults.standard.dictionary(forKey: Key.itemLastInteractedAt) as? [String: TimeInterval]) ?? [:]
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: Key.itemLastInteractedAt)
         }
     }
 
