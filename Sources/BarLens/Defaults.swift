@@ -40,6 +40,24 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
         case .dark:   return .dark
         }
     }
+
+    /// Concrete `ColorScheme` (never `nil`) so `NSHostingController` on macOS
+    /// never retains a stale `.dark` environment when switching back to `.system`.
+    func resolvedColorScheme(systemIsDark: Bool) -> ColorScheme {
+        switch self {
+        case .light:  return .light
+        case .dark:   return .dark
+        case .system: return systemIsDark ? .dark : .light
+        }
+    }
+
+    /// Concrete `NSAppearance` matching `resolvedColorScheme(systemIsDark:)`.
+    func resolvedNSAppearance(systemIsDark: Bool) -> NSAppearance {
+        let name: NSAppearance.Name = resolvedColorScheme(systemIsDark: systemIsDark) == .dark
+            ? .darkAqua
+            : .aqua
+        return NSAppearance(named: name)!
+    }
 }
 
 /// How hidden sections are presented when revealed.

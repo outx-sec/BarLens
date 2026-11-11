@@ -1,6 +1,7 @@
 import AppKit
 import CMenuBarPrivate   // only to report whether the private API exists
 import DividerIPC
+import SwiftUI
 
 /// Owns the section model and tells the helper what allow list to assert.
 ///
@@ -40,6 +41,7 @@ final class DividerEngine: ObservableObject {
     @Published private(set) var floatingBarIconStyle = Defaults.floatingBarIconStyle
     @Published private(set) var statusBarIconStyle = Defaults.statusBarIconStyle
     @Published private(set) var appearanceMode = Defaults.appearanceMode
+    @Published private(set) var systemIsDark: Bool = DividerEngine.readSystemIsDark()
     @Published private(set) var appLanguage = Defaults.appLanguage
     @Published private(set) var glassOpacity = Defaults.glassOpacity
     @Published private(set) var rimIntensity = Defaults.rimIntensity
@@ -56,6 +58,32 @@ final class DividerEngine: ObservableObject {
     @Published private(set) var systemItemModes: [String: ControlCenterShowMode] = MenuBarBuiltIns.controlCenterModes()
     private var liveVisibleSystemItemIDs: Set<String> = []
     private var distributedObserver: NSObjectProtocol?
+    private var themeDistributedObserver: NSObjectProtocol?
+    private var appearanceKVO: NSKeyValueObservation?
+
+    static func readSystemIsDark() -> Bool {
+        if let app = NSApp {
+            return app.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        }
+        return UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark"
+    }
+
+    var effectiveColorScheme: ColorScheme {
+        appearanceMode.resolvedColorScheme(systemIsDark: systemIsDark)
+    }
+
+    var effectiveNSAppearance: NSAppearance {
+        appearanceMode.resolvedNSAppearance(systemIsDark: systemIsDark)
+    }
+
+    func refreshSystemAppearance() {
+        let isDark = Self.readSystemIsDark()
+        guard systemIsDark != isDark else { return }
+        systemIsDark = isDark
+        if appearanceMode == .system {
+            onChange?()
+        }
+    }
 
     func isSystemItemActive(_ item: SystemItem) -> Bool {
         let mode = systemItemModes[item.identifier] ?? .disabled
@@ -300,6 +328,7 @@ final class DividerEngine: ObservableObject {
             self.onChange?()
         }
         observeLifecycle()
+        refreshSystemAppearance()
         // Write before launching: an old command can be stale after sleep or
         // a previous app exit, and must never kill the brand new helper.
         send(AgentCommand(mode: .suspend, allowed: []))
@@ -492,6 +521,12 @@ final class DividerEngine: ObservableObject {
             DistributedNotificationCenter.default().removeObserver(distributedObserver)
             self.distributedObserver = nil
         }
+        if let themeDistributedObserver {
+            DistributedNotificationCenter.default().removeObserver(themeDistributedObserver)
+            self.themeDistributedObserver = nil
+        }
+        appearanceKVO?.invalidate()
+        appearanceKVO = nil
         interruptMeasurements()
         cancelItemScanWork()
         stopHeartbeat()
@@ -572,6 +607,22 @@ final class DividerEngine: ObservableObject {
         ) { [weak self] _ in
             self?.refreshControlCenterModes()
             self?.refreshRunningApplications()
+        }
+        if let themeDistributedObserver {
+            DistributedNotificationCenter.default().removeObserver(themeDistributedObserver)
+        }
+        themeDistributedObserver = DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.refreshSystemAppearance()
+        }
+        appearanceKVO?.invalidate()
+        appearanceKVO = NSApp?.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
+            DispatchQueue.main.async {
+                self?.refreshSystemAppearance()
+            }
         }
         if let localMouseDownMonitor {
             NSEvent.removeMonitor(localMouseDownMonitor)
@@ -1068,7 +1119,14 @@ final class DividerEngine: ObservableObject {
     }
 
     func setAppearanceMode(_ mode: AppearanceMode) {
-        guard appearanceMode != mode else { return }
+        let latestDark = Self.readSystemIsDark()
+        if systemIsDark != latestDark {
+            systemIsDark = latestDark
+        }
+        guard appearanceMode != mode else {
+            onChange?()
+            return
+        }
         appearanceMode = mode
         Defaults.appearanceMode = mode
         onChange?()
@@ -1099,6 +1157,7 @@ final class DividerEngine: ObservableObject {
     }
 
     func applyOptimalAppearancePreset() {
+        setAppearanceMode(.system)
         setGlassOpacity(0.36)
         setRimIntensity(1.15)
     }

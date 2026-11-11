@@ -361,4 +361,19 @@ final class FloatingBarOrderAndProfileTests: XCTestCase {
         XCTAssertEqual(sectionModel.section(of: "com.example.hidden"), .hidden)
         XCTAssertEqual(sectionModel.section(of: "com.example.always"), .alwaysHidden)
     }
+
+    func testAppearanceModeResolvesExplicitAndSystemColorSchemes() {
+        XCTAssertEqual(AppearanceMode.dark.resolvedColorScheme(systemIsDark: false), .dark)
+        XCTAssertEqual(AppearanceMode.dark.resolvedNSAppearance(systemIsDark: false).name, .darkAqua)
+
+        XCTAssertEqual(AppearanceMode.light.resolvedColorScheme(systemIsDark: true), .light)
+        XCTAssertEqual(AppearanceMode.light.resolvedNSAppearance(systemIsDark: true).name, .aqua)
+
+        // Switching back to `.system` on a Light Mode Mac must concretely resolve to `.light` / `.aqua`
+        XCTAssertEqual(AppearanceMode.system.resolvedColorScheme(systemIsDark: false), .light)
+        XCTAssertEqual(AppearanceMode.system.resolvedNSAppearance(systemIsDark: false).name, .aqua)
+
+        XCTAssertEqual(AppearanceMode.system.resolvedColorScheme(systemIsDark: true), .dark)
+        XCTAssertEqual(AppearanceMode.system.resolvedNSAppearance(systemIsDark: true).name, .darkAqua)
+    }
 }
