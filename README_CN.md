@@ -80,7 +80,7 @@
 - **辅助功能（Accessibility）权限**（用于读取菜单栏布局并代理触发菜单点击）。
 
 ### 安装步骤
-1. 下载 `BarLens-1.1.dmg` 并打开，将 **`BarLens.app`** 拖入 **`/Applications`** 文件夹。
+1. 下载 `BarLens-1.0.1.dmg` 并打开，将 **`BarLens.app`** 拖入 **`/Applications`** 文件夹。
 2. 首次打开自签名开源包若遇 Gatekeeper 提示，可在终端执行：
    ```bash
    xattr -d com.apple.quarantine /Applications/BarLens.app

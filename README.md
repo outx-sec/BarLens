@@ -98,7 +98,7 @@ BarLens integrates with both `MenuBarClientCore` assessment bitmasks and `com.ap
 - **Accessibility Permission** *(Used to enumerate menu bar items and proxy clicks).*
 
 ### Install from Release DMG / ZIP
-1. Download `BarLens-1.1.dmg` from **Releases** and drag **`BarLens.app`** into **`/Applications`**.
+1. Download `BarLens-1.0.1.dmg` from **Releases** and drag **`BarLens.app`** into **`/Applications`**.
 2. Clear the quarantine flag on first launch (since open-source builds are self-signed):
    ```bash
    xattr -d com.apple.quarantine /Applications/BarLens.app
