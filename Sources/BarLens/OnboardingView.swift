@@ -2,9 +2,10 @@ import AppKit
 import SwiftUI
 
 /// Hosts the first-launch interactive Liquid Glass onboarding tour.
-final class OnboardingWindowController: NSWindowController {
+final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
     private let engine: DividerEngine
     private let onOpenSettings: (SettingsPane) -> Void
+    var onClose: (() -> Void)?
 
     init(engine: DividerEngine, onOpenSettings: @escaping (SettingsPane) -> Void) {
         self.engine = engine
@@ -14,7 +15,7 @@ final class OnboardingWindowController: NSWindowController {
             contentRect: NSRect(x: 0, y: 0, width: 660, height: 520),
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
-            defer: false
+            defer: true
         )
         window.title = tr("欢迎使用 BarLens", "Welcome to BarLens")
         window.titleVisibility = .hidden
@@ -28,29 +29,21 @@ final class OnboardingWindowController: NSWindowController {
         window.appearance = initialAppearance
 
         super.init(window: window)
-
-        let rootView = OnboardingView(
-            engine: engine,
-            onFinishToSettings: { [weak self] targetPane in
-                Defaults.hasCompletedOnboarding = true
-                Defaults.hasShownWelcome = true
-                self?.close()
-                self?.onOpenSettings(targetPane)
-            },
-            onDismissOnly: { [weak self] in
-                Defaults.hasCompletedOnboarding = true
-                Defaults.hasShownWelcome = true
-                self?.close()
-            }
-        )
-        let hosting = NSHostingController(rootView: rootView)
-        hosting.view.appearance = initialAppearance
-        window.contentViewController = hosting
-        window.setContentSize(NSSize(width: 660, height: 520))
+        window.delegate = self
     }
 
     required init?(coder: NSCoder) {
         fatalError("not used")
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        window?.contentViewController = nil
+        window?.delegate = nil
+        let callback = onClose
+        onClose = nil
+        DispatchQueue.main.async {
+            callback?()
+        }
     }
 
     func syncAppearance() {
@@ -61,15 +54,16 @@ final class OnboardingWindowController: NSWindowController {
     }
 
     func present() {
-        syncAppearance()
+        let target = engine.effectiveNSAppearance
         if let window {
             let freshRoot = OnboardingView(
                 engine: engine,
                 onFinishToSettings: { [weak self] targetPane in
                     Defaults.hasCompletedOnboarding = true
                     Defaults.hasShownWelcome = true
+                    let openSettings = self?.onOpenSettings
                     self?.close()
-                    self?.onOpenSettings(targetPane)
+                    openSettings?(targetPane)
                 },
                 onDismissOnly: { [weak self] in
                     Defaults.hasCompletedOnboarding = true
@@ -79,6 +73,12 @@ final class OnboardingWindowController: NSWindowController {
             )
             if let hosting = window.contentViewController as? NSHostingController<OnboardingView> {
                 hosting.rootView = freshRoot
+                hosting.view.appearance = target
+            } else {
+                let hosting = NSHostingController(rootView: freshRoot)
+                hosting.view.appearance = target
+                window.contentViewController = hosting
+                window.setContentSize(NSSize(width: 660, height: 520))
             }
             let mouse = NSEvent.mouseLocation
             let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
@@ -89,6 +89,7 @@ final class OnboardingWindowController: NSWindowController {
                 ))
             }
         }
+        syncAppearance()
         NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)

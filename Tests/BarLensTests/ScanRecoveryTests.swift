@@ -125,4 +125,25 @@ final class ScanRecoveryTests: XCTestCase {
             XCTAssertThrowsError(try BulkAssignmentBoundary.resolve(in: snapshot, on: display))
         }
     }
+
+    func testRemovedStatusItemOnDisplaySwitchRetiresCleanlyAfterTwoResponsiveNoValueScans() {
+        // Reproduces switching from an external display (where `com.apple.AirPlayUIAgent` or a display
+        // utility owned an extra) back to the MacBook screen: the running process removes its status item
+        // and responsively answers `AXError.noValue` (`.absent`) without entering `failedOwners`.
+        let running: Set<String> = ["com.apple.AirPlayUIAgent", "com.tencent.xinWeChat"]
+        var state = MenuBarScanState(owners: running)
+
+        var ownerResults1 = ItemScanOwnerResults()
+        ownerResults1.record(owner: "com.apple.AirPlayUIAgent", .absent)
+        ownerResults1.record(owner: "com.tencent.xinWeChat", .complete([item("com.tencent.xinWeChat")]))
+        let scan1 = ownerResults1.result(allOwners: running, knownOwners: state.owners)
+
+        XCTAssertTrue(scan1.failedOwners.isEmpty, "Responsive AXNoValue must not stick in failedOwners")
+        XCTAssertTrue(state.accept(scan1, running: running), "First absence requests one quiet confirmation pass")
+        XCTAssertEqual(state.owners, running, "Owner stays protected during first confirmation pass")
+
+        let scan2 = ownerResults1.result(allOwners: running, knownOwners: state.owners)
+        XCTAssertFalse(state.accept(scan2, running: running), "Second consecutive responsive absence retires owner cleanly")
+        XCTAssertEqual(state.owners, ["com.tencent.xinWeChat"])
+    }
 }

@@ -58,17 +58,42 @@ final class AXScanTests: XCTestCase {
         wait(for: [started, mainResponsive, replacementFinished, staleDelivered], timeout: 0.5)
     }
 
-    func testHeadlessProcessesAreAbsentButKnownOwnersAndCommunicationFailuresAreNot() {
+    func testResponsiveNoValueIsReliableWhileCommunicationFailuresAreNot() {
         for error in [AXError.noValue, .attributeUnsupported, .notImplemented] {
             XCTAssertTrue(ItemEnumerator.missingExtrasAreReliable(errorCode: error.rawValue,
                                                                  previouslyObserved: false))
-            XCTAssertFalse(ItemEnumerator.missingExtrasAreReliable(errorCode: error.rawValue,
-                                                                  previouslyObserved: true))
+            XCTAssertTrue(ItemEnumerator.missingExtrasAreReliable(errorCode: error.rawValue,
+                                                                 previouslyObserved: true))
         }
         for error in [AXError.cannotComplete, .apiDisabled, .invalidUIElement] {
             XCTAssertFalse(ItemEnumerator.missingExtrasAreReliable(errorCode: error.rawValue,
                                                                   previouslyObserved: false))
+            XCTAssertFalse(ItemEnumerator.missingExtrasAreReliable(errorCode: error.rawValue,
+                                                                  previouslyObserved: true))
         }
+    }
+
+    func testMenuBarScanCandidateFilterExcludesProhibitedAndWebKitSandboxHelpers() {
+        XCTAssertFalse(ItemEnumerator.shouldIncludeInMenuBarScan(
+            bundleID: "com.apple.quicklook.QuickLookUIService",
+            activationPolicy: .prohibited
+        ))
+        XCTAssertFalse(ItemEnumerator.shouldIncludeInMenuBarScan(
+            bundleID: "com.apple.WebKit.WebContent",
+            activationPolicy: .accessory
+        ))
+        XCTAssertFalse(ItemEnumerator.shouldIncludeInMenuBarScan(
+            bundleID: "com.tencent.flue.helper.renderer",
+            activationPolicy: .accessory
+        ))
+        XCTAssertTrue(ItemEnumerator.shouldIncludeInMenuBarScan(
+            bundleID: "com.apple.MenuBarAgent",
+            activationPolicy: .accessory
+        ))
+        XCTAssertTrue(ItemEnumerator.shouldIncludeInMenuBarScan(
+            bundleID: "com.tencent.xinWeChat",
+            activationPolicy: .regular
+        ))
     }
 
     func testUnreadableUnknownRootIsUnobservedRatherThanAbsentOrFailed() {

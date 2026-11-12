@@ -176,7 +176,10 @@ if parentPID > 1 {
     parentSource = source
 }
 
-let timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in tick() }
+// Directory and parent-process kqueue sources wake the agent immediately (<1ms)
+// on command writes and UI process termination; this 1s timer only handles bounded
+// activation timeouts/retries and 10s heartbeat staleness checks.
+let timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in tick() }
 RunLoop.main.add(timer, forMode: .common)
 tick()
 RunLoop.main.run()

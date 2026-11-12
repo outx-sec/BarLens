@@ -358,21 +358,40 @@ struct StatusBubbleTracker {
     static let chatterWindowSeconds: TimeInterval = 36.0
     /// Maximum discrete text mutations allowed inside `chatterWindowSeconds` before muting text diffs.
     static let maxMutationsBeforeChatterMute: Int = 2
+    /// Rolling window used to suppress background `A <-> B` ping-pong state oscillations without user interaction.
+    static let pingPongWindowSeconds: TimeInterval = 240.0
+    /// Maximum unhandled `.stateChanged` surface bubbles allowed inside `pingPongWindowSeconds`.
+    static let maxUnhandledStateBubblesPerWindow: Int = 2
 
     private(set) var baselines: [String: ObservedSemanticSnapshot] = [:]
     private var recentTextChangeTimes: [String: [TimeInterval]] = [:]
+    private var recentSeenStateSignatures: [String: [String: TimeInterval]] = [:]
+    private var recentStateBubbleTimes: [String: [TimeInterval]] = [:]
     private var lastBubbledAt: [String: TimeInterval] = [:]
 
     mutating func reset() {
         baselines.removeAll()
         recentTextChangeTimes.removeAll()
+        recentSeenStateSignatures.removeAll()
+        recentStateBubbleTimes.removeAll()
         lastBubbledAt.removeAll()
     }
 
     mutating func removeOwner(_ bundleID: String) {
         baselines.removeValue(forKey: bundleID)
         recentTextChangeTimes.removeValue(forKey: bundleID)
+        recentSeenStateSignatures.removeValue(forKey: bundleID)
+        recentStateBubbleTimes.removeValue(forKey: bundleID)
         lastBubbledAt.removeValue(forKey: bundleID)
+    }
+
+    /// Clears state-flip ping-pong suppression for `bundleID` when the user actively interacts with it.
+    mutating func noteUserInteraction(_ bundleID: String) {
+        recentSeenStateSignatures.removeValue(forKey: bundleID)
+        recentStateBubbleTimes.removeValue(forKey: bundleID)
+        if let currentSig = baselines[bundleID]?.discreteStateSignature {
+            recentSeenStateSignatures[bundleID] = [currentSig: Date().timeIntervalSince1970]
+        }
     }
 
     /// Builds a noise-filtered semantic snapshot from `LensTelemetry`.
@@ -487,6 +506,9 @@ struct StatusBubbleTracker {
                           duration: TimeInterval? = nil) -> StatusBubbleEvent? {
         guard let previous = baselines[bundleID] else {
             baselines[bundleID] = snapshot
+            if let sig = snapshot.discreteStateSignature {
+                recentSeenStateSignatures[bundleID] = [sig: now]
+            }
             return nil
         }
         baselines[bundleID] = snapshot
@@ -544,9 +566,25 @@ struct StatusBubbleTracker {
            let prevSig = previous.discreteStateSignature,
            let nextSig = snapshot.discreteStateSignature,
            prevSig != nextSig {
+            var seenMap = (recentSeenStateSignatures[bundleID] ?? [:]).filter {
+                now - $0.value <= Self.pingPongWindowSeconds
+            }
+            seenMap[prevSig] = seenMap[prevSig] ?? now
+            let wasRecentlySeen = (seenMap[nextSig] != nil)
+            seenMap[nextSig] = now
+            recentSeenStateSignatures[bundleID] = seenMap
+
+            let stateHistory = (recentStateBubbleTimes[bundleID] ?? []).filter {
+                now - $0 <= Self.pingPongWindowSeconds
+            }
+            recentStateBubbleTimes[bundleID] = stateHistory
+
             let lastFire = lastBubbledAt[bundleID] ?? 0
-            if now - lastFire >= Self.stateChangeCooldown {
+            if !wasRecentlySeen,
+               stateHistory.count < Self.maxUnhandledStateBubblesPerWindow,
+               now - lastFire >= Self.stateChangeCooldown {
                 lastBubbledAt[bundleID] = now
+                recentStateBubbleTimes[bundleID, default: []].append(now)
                 return makeEvent(reason: .stateChanged(summary: snapshot.displaySummary ?? ""))
             }
         }

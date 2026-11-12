@@ -99,7 +99,7 @@
 `./build.sh` 在未检测到本地开发证书时会自动回退为 **ad-hoc 临时签名（`--sign -`）** 并打印提示，因此克隆仓库后可直接编译运行：
 
 ```bash
-# 运行单元测试（84 项测试）
+# 运行单元测试（88 项测试）
 swift test
 
 # 编译 Release 版本并安装到 /Applications/BarLens.app

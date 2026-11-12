@@ -80,9 +80,13 @@ final class DividerEngine: ObservableObject {
     private var lastMeasuredWidthByBundleID: [String: CGFloat] = [:]
     private var lastMeasuredMinXByBundleID: [String: CGFloat] = [:]
     private var latestDisplayGeometries: [DisplayMenuBarGeometry] = []
+    private var cachedTopBarClickScreens: [TopBarClickTracker.ScreenDescriptor] = []
     private var latestFrontmostMenuWidth: CGFloat?
     private var activeDotDisplayID: DisplayID?
     private var fixedSystemBarWidth: CGFloat = 140
+    private var lastControlCenterModesRefreshAt: TimeInterval = 0
+    private var lastAgentStatusStamp: AgentCommand.FileStamp?
+    private var cachedAgentStatus: AgentStatus?
     private var itemLastInteractedAt: [String: TimeInterval] = Defaults.itemLastInteractedAt
     private var itemFirstSeenAt: [String: TimeInterval] = Defaults.itemFirstSeenAt
     private var usageDecayBaselineAt: TimeInterval = {
@@ -220,7 +224,8 @@ final class DividerEngine: ObservableObject {
     /// query, and `apply()` can run while a menu is closing — the query was
     /// long enough to visibly stutter that animation. Refreshed from the
     /// workspace notifications instead of on every apply.
-    private var runningBundleIDs: Set<String> = []
+    /// `private(set)` for internal read access; refreshed from workspace notifications.
+    private(set) var runningBundleIDs: Set<String> = []
     /// Several workspace notifications can arrive while an Accessibility scan
     /// is running. Only the newest scan may replace the catalog.
     private var itemScanGeneration = 0
@@ -399,6 +404,7 @@ final class DividerEngine: ObservableObject {
             self.onChange?()
         }
         observeLifecycle()
+        refreshCachedClickScreens()
         refreshSystemAppearance()
         engineStartedAt = Date().timeIntervalSince1970
         refreshDisplayMirroringState(applyIfNeeded: false)
@@ -486,10 +492,10 @@ final class DividerEngine: ObservableObject {
 
     private func startItemScan(generation: Int, attempt: Int) {
         guard isStarted, !isSleeping, generation == itemScanGeneration else { return }
-        let context = ItemEnumerator.captureContext()
+        let knownOwners = itemScanState.owners
+        let context = ItemEnumerator.captureContext(knownOwners: knownOwners)
         let cancellation = AXScanCancellation()
         itemScanCancellation = cancellation
-        let knownOwners = itemScanState.owners
         itemScanQueue.async { [weak self] in
             guard !cancellation.isCancelled else { return }
             let result = ItemEnumerator.scan(context: context, knownOwners: knownOwners,
@@ -574,14 +580,20 @@ final class DividerEngine: ObservableObject {
                         "unobservedCount": String(result.unobservedOwners.count)])
                     return
                 }
+                let relevantFailures = result.failedOwners.subtracting(SectionModel.notClassifiable)
+                let hasActualFailure = result.timedOut || !relevantFailures.isEmpty
                 let maximumRetries = 3
-                self.scanWarning = attempt < maximumRetries
-                    ? tr("菜单栏尚未读取完整，保留上次结果并自动重试。", "Menu bar scan incomplete; keeping previous state and retrying.")
-                    : tr("部分菜单栏暂时读不到，已保留上次结果；可稍后刷新。", "Some menu bar items could not be read; keeping previous state.")
-                self.diagnosticLog.record(event: "catalog_scan_incomplete", details: [
-                    "attempt": String(attempt + 1), "failedCount": String(result.failedOwners.count),
-                    "failureSummary": result.failureSummary,
-                    "timedOut": String(result.timedOut), "retainedCount": String(self.bundlesWithItems.count)])
+                if hasActualFailure {
+                    self.scanWarning = attempt < maximumRetries
+                        ? tr("菜单栏尚未读取完整，保留上次结果并自动重试。", "Menu bar scan incomplete; keeping previous state and retrying.")
+                        : tr("部分菜单栏暂时读不到，已保留上次结果；可稍后刷新。", "Some menu bar items could not be read; keeping previous state.")
+                    self.diagnosticLog.record(event: "catalog_scan_incomplete", details: [
+                        "attempt": String(attempt + 1), "failedCount": String(result.failedOwners.count),
+                        "failureSummary": result.failureSummary,
+                        "timedOut": String(result.timedOut), "retainedCount": String(self.bundlesWithItems.count)])
+                } else if self.scanWarning != nil {
+                    self.scanWarning = nil
+                }
                 guard attempt < maximumRetries else { return }
                 let retry = DispatchWorkItem { [weak self] in
                     self?.startItemScan(generation: generation, attempt: attempt + 1)
@@ -709,9 +721,16 @@ final class DividerEngine: ObservableObject {
             }
         }
         observe(.default, NSApplication.didChangeScreenParametersNotification) { [weak self] in
-            self?.latestDisplayGeometries = ItemEnumerator.displayMenuBarGeometries()
-            self?.refreshDisplayMirroringState(applyIfNeeded: true)
-            self?.scheduleRecovery(reason: tr("显示器变化", "Display change"))
+            guard let self else { return }
+            self.latestDisplayGeometries = ItemEnumerator.displayMenuBarGeometries()
+            self.refreshCachedClickScreens()
+            self.lastMeasuredMinXByBundleID.removeAll()
+            if let currentDotDisplay = self.activeDotDisplayID,
+               !self.latestDisplayGeometries.contains(where: { $0.displayID == currentDotDisplay }) {
+                self.activeDotDisplayID = self.latestDisplayGeometries.first?.displayID
+            }
+            self.refreshDisplayMirroringState(applyIfNeeded: true)
+            self.scheduleRecovery(reason: tr("显示器变化", "Display change"))
         }
         let activateToken = workspace.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
@@ -852,7 +871,7 @@ final class DividerEngine: ObservableObject {
             onChange?()
             return
         }
-        if let pid = agent.processID, let status = AgentStatus.read(),
+        if let pid = agent.processID, let status = readLatestAgentStatus(),
            status.isCurrent(sessionID: sessionID, processID: pid) {
             var uiStateChanged = false
             let newRecovering = status.error == nil && (status.isApplying || status.requestID != currentCommand?.requestID)
@@ -948,12 +967,33 @@ final class DividerEngine: ObservableObject {
 
     // MARK: - Command channel
 
+    private func readLatestAgentStatus() -> AgentStatus? {
+        guard let stamp = AgentCommand.fileStamp(at: AgentStatus.fileURL) else {
+            lastAgentStatusStamp = nil
+            cachedAgentStatus = nil
+            return nil
+        }
+        if stamp == lastAgentStatusStamp, let cached = cachedAgentStatus {
+            return cached
+        }
+        if let decoded = AgentStatus.read() {
+            lastAgentStatusStamp = stamp
+            cachedAgentStatus = decoded
+            return decoded
+        }
+        return cachedAgentStatus
+    }
+
     private func startHeartbeat() {
         heartbeat?.invalidate()
         heartbeat = Timer.scheduledTimer(withTimeInterval: AgentCommand.heartbeatInterval,
                                          repeats: true) { [weak self] _ in
             guard let self, !self.isSleeping else { return }
-            self.refreshControlCenterModes()
+            let now = ProcessInfo.processInfo.systemUptime
+            if now - self.lastControlCenterModesRefreshAt >= 20.0 {
+                self.lastControlCenterModesRefreshAt = now
+                self.refreshControlCenterModes()
+            }
             if self.writeCurrentCommand() { self.ensureAgentIsHealthy() }
         }
         if let heartbeat { RunLoop.main.add(heartbeat, forMode: .common) }
@@ -1188,7 +1228,7 @@ final class DividerEngine: ObservableObject {
 
     private var isCurrentCommandAcknowledged: Bool {
         guard let pid = agent.processID,
-              let status = AgentStatus.read(),
+              let status = readLatestAgentStatus(),
               status.isCurrent(sessionID: sessionID, processID: pid) else { return false }
         return status.requestID == currentCommand?.requestID
             && !status.isApplying && status.error == nil
@@ -1680,6 +1720,7 @@ final class DividerEngine: ObservableObject {
             itemLastInteractedAt = Dictionary(uniqueKeysWithValues: sorted.map { ($0.key, $0.value) })
         }
         Defaults.itemLastInteractedAt = itemLastInteractedAt
+        statusBubbleTracker.noteUserInteraction(bundleID)
         if autoDecayedBundleIDs.remove(bundleID) != nil {
             Defaults.autoDecayedBundleIDs = autoDecayedBundleIDs
         }
@@ -1690,10 +1731,8 @@ final class DividerEngine: ObservableObject {
         }
     }
 
-    /// Passively records a direct user click on a native top-menu-bar icon using the latest cached AX snapshot.
-    func recordNativeTopBarClick(at appKitPoint: NSPoint) {
-        guard !retainedScanItems.isEmpty else { return }
-        let screens: [TopBarClickTracker.ScreenDescriptor] = NSScreen.screens.compactMap { screen in
+    private func refreshCachedClickScreens() {
+        cachedTopBarClickScreens = NSScreen.screens.compactMap { screen in
             guard let displayID = ItemEnumerator.displayID(for: screen) else { return nil }
             return TopBarClickTracker.ScreenDescriptor(
                 displayID: displayID,
@@ -1701,9 +1740,31 @@ final class DividerEngine: ObservableObject {
                 cgBounds: CGDisplayBounds(displayID.rawValue)
             )
         }
+    }
+
+    /// Fast O(1) pure-value check rejecting pointer events outside any display's top menu bar band
+    /// without touching `NSScreen.screens` or CoreGraphics on every mouse click or 120Hz scroll event.
+    func isAppKitPointNearMenuBarBand(_ appKitPoint: NSPoint) -> Bool {
+        if cachedTopBarClickScreens.isEmpty {
+            refreshCachedClickScreens()
+        }
+        for screen in cachedTopBarClickScreens {
+            if appKitPoint.x >= screen.appKitFrame.minX - 12,
+               appKitPoint.x <= screen.appKitFrame.maxX + 12,
+               appKitPoint.y >= screen.appKitFrame.maxY - 56,
+               appKitPoint.y <= screen.appKitFrame.maxY + 6 {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Passively records a direct user click on a native top-menu-bar icon using the latest cached AX snapshot.
+    func recordNativeTopBarClick(at appKitPoint: NSPoint) {
+        guard !retainedScanItems.isEmpty, isAppKitPointNearMenuBarBand(appKitPoint) else { return }
         guard let matched = TopBarClickTracker.matchedOwnerBundleID(
             appKitClickPoint: appKitPoint,
-            screens: screens,
+            screens: cachedTopBarClickScreens,
             items: retainedScanItems,
             ownIdentifiers: SectionModel.ownIdentifiers,
             notClassifiable: SectionModel.notClassifiable
@@ -1712,6 +1773,7 @@ final class DividerEngine: ObservableObject {
         let now = Date().timeIntervalSince1970
         itemLastInteractedAt[matched] = now
         Defaults.itemLastInteractedAt = itemLastInteractedAt
+        statusBubbleTracker.noteUserInteraction(matched)
         if autoDecayedBundleIDs.remove(matched) != nil {
             Defaults.autoDecayedBundleIDs = autoDecayedBundleIDs
         }
@@ -1726,6 +1788,7 @@ final class DividerEngine: ObservableObject {
     }
 
     private func noteApplicationActivated(bundleID: String) {
+        statusBubbleTracker.noteUserInteraction(bundleID)
         guard var activeBubble = activeStatusBubbles[bundleID] else { return }
         let now = Date().timeIntervalSince1970
         activeBubble.wasHandled = true
@@ -2488,7 +2551,8 @@ final class DividerEngine: ObservableObject {
         }
         if let dotItem = result.items.first(where: { $0.axIdentifier == "BarLens.dot" }) {
             activeDotDisplayID = dotItem.display
-        } else if activeDotDisplayID == nil {
+        } else if activeDotDisplayID == nil
+            || !latestDisplayGeometries.contains(where: { $0.displayID == activeDotDisplayID }) {
             activeDotDisplayID = latestDisplayGeometries.first?.displayID
         }
 
@@ -3144,8 +3208,8 @@ final class DividerEngine: ObservableObject {
 
         func measure() {
             guard isCurrent(self) else { return }
-            let context = ItemEnumerator.captureContext()
             let knownOwners = itemScanState.owners.union(SectionModel.ownIdentifiers)
+            let context = ItemEnumerator.captureContext(knownOwners: knownOwners)
             bulkScanQueue.async { [weak self] in
                 guard !cancellation.isCancelled else { return }
                 let result = ItemEnumerator.scan(context: context, knownOwners: knownOwners,

@@ -359,6 +359,49 @@ final class SelfCuratingBarTests: XCTestCase {
             now: base + 7
         )
         XCTAssertNil(muted, "Rapidly mutating text ticker must be muted by rolling chatter damper")
+
+        // 4. Slow background `A <-> B -> A` ping-pong every ~70s surfaces the first transition
+        //    once, then suppresses bouncing back to an already-seen state unless user interacts.
+        let snapIdle = makeLyricSnap("Idle")
+        let snapSyncing = makeLyricSnap("Syncing Workspace")
+        _ = tracker.observe(bundleID: "com.bg.agent", appName: "Agent", snapshot: snapIdle, allowBubbling: true, now: base)
+        let firstFlip = tracker.observe(
+            bundleID: "com.bg.agent",
+            appName: "Agent",
+            snapshot: snapSyncing,
+            allowBubbling: true,
+            now: base + 65
+        )
+        XCTAssertEqual(firstFlip?.reason, .stateChanged(summary: "Syncing Workspace"))
+
+        let bounceBack = tracker.observe(
+            bundleID: "com.bg.agent",
+            appName: "Agent",
+            snapshot: snapIdle,
+            allowBubbling: true,
+            now: base + 130
+        )
+        XCTAssertNil(bounceBack, "Bouncing back to already-seen baseline state must not re-surface")
+
+        let repeatPingPong = tracker.observe(
+            bundleID: "com.bg.agent",
+            appName: "Agent",
+            snapshot: snapSyncing,
+            allowBubbling: true,
+            now: base + 195
+        )
+        XCTAssertNil(repeatPingPong, "Repeated A<->B ping-pong inside 240s window must stay suppressed")
+
+        // User interaction resets ping-pong suppression
+        tracker.noteUserInteraction("com.bg.agent")
+        let afterUserClick = tracker.observe(
+            bundleID: "com.bg.agent",
+            appName: "Agent",
+            snapshot: snapIdle,
+            allowBubbling: true,
+            now: base + 230
+        )
+        XCTAssertEqual(afterUserClick?.reason, .stateChanged(summary: "Idle"))
     }
 
     // MARK: - 4. Presentation Shield & Profile Serialization

@@ -178,7 +178,8 @@ final class Catalog: ObservableObject {
 
     func rebuild(model: SectionModel, query: String,
                  extraOwners: Set<String> = [],
-                 snapshot: [MenuBarItem]? = nil) {
+                 snapshot: [MenuBarItem]? = nil,
+                 completion: (() -> Void)? = nil) {
         generation += 1
         let expected = generation
         self.query = query
@@ -189,6 +190,10 @@ final class Catalog: ObservableObject {
             let all = AppCatalog.entries(model: model, info: &self.info,
                                          extraOwners: extraOwners,
                                          snapshot: snapshot)
+            if self.info.count > 96 {
+                let keepIDs = Set(all.map(\.bundleID))
+                self.info = self.info.filter { keepIDs.contains($0.key) }
+            }
             // Counted over every app, not the filtered list: one the search is
             // hiding still moves when the default changes.
             let unclassified = all.filter { !model.isClassified($0.bundleID) }.count
@@ -198,6 +203,7 @@ final class Catalog: ObservableObject {
                 self.entries = all.filter { AppCatalog.matches($0, query: self.query) }
                 self.unclassifiedCount = unclassified
                 self.isLoading = false
+                completion?()
             }
         }
     }
@@ -484,16 +490,53 @@ enum AppCatalog {
             fallbackBundleURL: parentAppURL,
             appIcon: rawIcon
         )
+        // Downsample full multi-representation `.icns` (`1024×1024` = ~4.2 MB decoded per app)
+        // to a single crisp `64×64` (`32×32pt @2x` = 16 KB) bitmap representation, since UI rows
+        // never render app icons larger than 32×32pt.
+        let compactIcon = rawIcon.map { downsampleAppIcon($0, pixelSize: 64, pointSize: 32) }
 
         let catType = (resolvedURL.flatMap(Bundle.init(url:))?.infoDictionary?["LSApplicationCategoryType"] as? String)
             ?? (parentAppURL.flatMap(Bundle.init(url:))?.infoDictionary?["LSApplicationCategoryType"] as? String)
 
         return AppInfo(
             name: finalName,
-            icon: rawIcon,
+            icon: compactIcon,
             monochromeIcon: monoIcon,
             categoryType: catType
         )
+    }
+
+    private static func downsampleAppIcon(_ source: NSImage, pixelSize: Int, pointSize: CGFloat) -> NSImage {
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: pixelSize,
+            pixelsHigh: pixelSize,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: pixelSize * 4,
+            bitsPerPixel: 32
+        ) else {
+            return source
+        }
+        NSGraphicsContext.saveGraphicsState()
+        if let ctx = NSGraphicsContext(bitmapImageRep: rep) {
+            NSGraphicsContext.current = ctx
+            ctx.imageInterpolation = .high
+            source.draw(
+                in: NSRect(x: 0, y: 0, width: pixelSize, height: pixelSize),
+                from: .zero,
+                operation: .sourceOver,
+                fraction: 1.0
+            )
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        rep.size = NSSize(width: pointSize, height: pointSize)
+        let compact = NSImage(size: NSSize(width: pointSize, height: pointSize))
+        compact.addRepresentation(rep)
+        return compact
     }
 
     static func matches(_ entry: AppEntry, query: String) -> Bool {

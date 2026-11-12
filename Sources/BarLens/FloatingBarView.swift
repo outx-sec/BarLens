@@ -295,10 +295,53 @@ final class FloatingBarController {
             return
         }
 
+        var liveBarOwners: Set<String> = if let scanItems = engine.latestScanItems {
+            Set(scanItems.map(\.ownerBundleID))
+        } else {
+            engine.bundlesWithItems
+        }
+        liveBarOwners.subtract(SectionModel.ownIdentifiers)
+        liveBarOwners.subtract(SectionModel.notClassifiable)
+        if !engine.runningBundleIDs.isEmpty {
+            liveBarOwners.formIntersection(engine.runningBundleIDs)
+        }
+        let cachedBarOwners = Set(
+            catalog.entries
+                .filter { $0.isRunning && $0.itemCount > 0 }
+                .map(\.bundleID)
+        )
+        let needsInitialCatalogSync = !isShown && (
+            (engine.latestScanItems == nil && catalog.entries.isEmpty)
+            || cachedBarOwners != liveBarOwners
+        )
+
+        if needsInitialCatalogSync {
+            catalog.rebuild(
+                model: engine.model,
+                query: "",
+                extraOwners: engine.ledgerOnlyOwners,
+                snapshot: engine.latestScanItems
+            ) { [weak self] in
+                guard let self,
+                      self.engine.revealPresentationStyle == .floatingBar,
+                      self.engine.reveal != .none,
+                      let currentButton = self.anchorButton,
+                      let currentWindow = currentButton.window,
+                      let currentScreen = currentWindow.screen ?? NSScreen.main else {
+                    return
+                }
+                self.mountAndPresentPanel(buttonWindow: currentWindow, screen: currentScreen)
+            }
+            return
+        }
+
         catalog.rebuild(model: engine.model, query: "",
                         extraOwners: engine.ledgerOnlyOwners,
                         snapshot: engine.latestScanItems)
+        mountAndPresentPanel(buttonWindow: buttonWindow, screen: screen)
+    }
 
+    private func mountAndPresentPanel(buttonWindow: NSWindow, screen: NSScreen) {
         let panel = ensurePanel()
         let targetAppearance = engine.effectiveNSAppearance
         panel.appearance = targetAppearance
@@ -350,10 +393,15 @@ final class FloatingBarController {
         guard let panel, let button = anchorButton, let buttonWindow = button.window,
               let screen = buttonWindow.screen ?? NSScreen.main else { return }
         let maxBarWidth = max(260, screen.visibleFrame.width - 32)
-        panel.contentView?.layoutSubtreeIfNeeded()
-        let fittingSize = panel.contentViewController?.view.fittingSize ?? NSSize(width: 240, height: 74)
-        let width = min(maxBarWidth, max(160, fittingSize.width))
-        let height = max(70, fittingSize.height)
+        let fittingSize: NSSize
+        if let hosting = panel.contentViewController as? NSHostingController<FloatingBarView> {
+            fittingSize = hosting.sizeThatFits(in: NSSize(width: maxBarWidth, height: 200))
+        } else {
+            panel.contentView?.layoutSubtreeIfNeeded()
+            fittingSize = panel.contentViewController?.view.fittingSize ?? NSSize(width: 240, height: 74)
+        }
+        let width = min(maxBarWidth, max(160, ceil(fittingSize.width)))
+        let height = max(70, ceil(fittingSize.height))
 
         let buttonRectInWindow = button.convert(button.bounds, to: nil)
         let buttonRectOnScreen = buttonWindow.convertToScreen(buttonRectInWindow)
@@ -367,7 +415,12 @@ final class FloatingBarController {
         let menuBarBottom = min(buttonRectOnScreen.minY, screen.visibleFrame.maxY)
         let y = menuBarBottom - height + 1
 
-        panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: true)
+        let targetFrame = NSRect(x: x, y: y, width: width, height: height)
+        if panel.frame != targetFrame {
+            panel.setFrame(targetFrame, display: panel.isVisible)
+        }
+        panel.contentView?.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        panel.contentView?.layoutSubtreeIfNeeded()
     }
 
     private func resolveLoupeItem(for itemID: String) -> FloatingBarItem? {
@@ -547,25 +600,23 @@ final class FloatingBarController {
     }
 
     private func hideSubmenuPanel() {
-        guard let submenuPanel else { return }
-        if submenuPanel.isVisible {
-            submenuPanel.orderOut(nil)
+        guard let existing = submenuPanel else { return }
+        if existing.isVisible {
+            existing.orderOut(nil)
         }
-        if submenuPanel.contentViewController != nil {
-            submenuPanel.contentViewController = nil
-        }
+        existing.contentViewController = nil
+        submenuPanel = nil
     }
 
     private func hideLoupePanel() {
         hideSubmenuPanel()
         engine.isLensLoupeHovered = false
-        guard let loupePanel else { return }
-        if loupePanel.isVisible {
-            loupePanel.orderOut(nil)
+        guard let existing = loupePanel else { return }
+        if existing.isVisible {
+            existing.orderOut(nil)
         }
-        if loupePanel.contentViewController != nil {
-            loupePanel.contentViewController = nil
-        }
+        existing.contentViewController = nil
+        loupePanel = nil
     }
 
     func hide() {
@@ -573,17 +624,20 @@ final class FloatingBarController {
         loupeCoordinator.dismissImmediately()
         engine.isFloatingBarHovered = false
         engine.isLensLoupeHovered = false
-        if let submenuPanel {
-            if submenuPanel.isVisible { submenuPanel.orderOut(nil) }
-            if submenuPanel.contentViewController != nil { submenuPanel.contentViewController = nil }
+        if let existingSubmenu = submenuPanel {
+            if existingSubmenu.isVisible { existingSubmenu.orderOut(nil) }
+            existingSubmenu.contentViewController = nil
+            submenuPanel = nil
         }
-        if let loupePanel {
-            if loupePanel.isVisible { loupePanel.orderOut(nil) }
-            if loupePanel.contentViewController != nil { loupePanel.contentViewController = nil }
+        if let existingLoupe = loupePanel {
+            if existingLoupe.isVisible { existingLoupe.orderOut(nil) }
+            existingLoupe.contentViewController = nil
+            loupePanel = nil
         }
-        if let panel {
-            if panel.isVisible { panel.orderOut(nil) }
-            if panel.contentViewController != nil { panel.contentViewController = nil }
+        if let existingPanel = panel {
+            if existingPanel.isVisible { existingPanel.orderOut(nil) }
+            existingPanel.contentViewController = nil
+            panel = nil
         }
     }
 
@@ -593,7 +647,7 @@ final class FloatingBarController {
             contentRect: NSRect(x: 0, y: 0, width: 280, height: 74),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
-            defer: false
+            defer: true
         )
         panel.level = .statusBar
         panel.isFloatingPanel = true

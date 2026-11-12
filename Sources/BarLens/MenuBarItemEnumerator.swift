@@ -153,14 +153,31 @@ enum ItemEnumerator {
         _ = AXIsProcessTrustedWithOptions(options as CFDictionary)
     }
 
+    static func shouldIncludeInMenuBarScan(bundleID: String,
+                                           activationPolicy: NSApplication.ActivationPolicy) -> Bool {
+        guard activationPolicy != .prohibited else { return false }
+        if bundleID.hasPrefix("com.apple.WebKit.") { return false }
+        let lower = bundleID.lowercased()
+        if lower.hasSuffix(".helper.renderer")
+            || lower.hasSuffix(".helper.gpu")
+            || lower.hasSuffix(".helper.plugin") {
+            return false
+        }
+        return true
+    }
+
     /// AppKit screen and running-process metadata are captured on the main
     /// queue. Only the potentially blocking AX messages run on workers.
-    static func captureContext() -> ItemScanContext {
-        if !Thread.isMainThread { return DispatchQueue.main.sync { captureContext() } }
+    static func captureContext(knownOwners: Set<String> = []) -> ItemScanContext {
+        if !Thread.isMainThread { return DispatchQueue.main.sync { captureContext(knownOwners: knownOwners) } }
         let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         return ItemScanContext(
             applications: NSWorkspace.shared.runningApplications.compactMap {
                 guard $0.processIdentifier > 0, let bundleID = $0.bundleIdentifier else { return nil }
+                guard knownOwners.contains(bundleID)
+                    || shouldIncludeInMenuBarScan(bundleID: bundleID, activationPolicy: $0.activationPolicy) else {
+                    return nil
+                }
                 return ItemScanApplication(pid: $0.processIdentifier, bundleID: bundleID)
             },
             screens: displayFrames(),
@@ -645,11 +662,16 @@ enum ItemEnumerator {
         return entries
     }
 
-    /// An app that never exposed Accessibility is not a failed menu-bar read.
-    /// A previously observed owner disappearing is ambiguous and must be kept
-    /// until a later reliable snapshot (or process exit) resolves it.
-    static func missingExtrasAreReliable(errorCode: Int32, previouslyObserved: Bool) -> Bool {
-        guard !previouslyObserved else { return false }
+    /// Distinguishes responsive Accessibility absence (`AXError.noValue`, `.attributeUnsupported`,
+    /// `.notImplemented` — returned both by apps that never owned a status item and by running apps
+    /// that destroyed their last `NSStatusItem`) from communication / responsiveness failures
+    /// (`.cannotComplete`, `.apiDisabled`, `.invalidUIElement`, timeouts).
+    ///
+    /// Previously observed owners returning `.absent` remain protected against single-scan wake
+    /// transients by `MenuBarScanState` (two-scan confirmation) and `ItemScanOwnerResults`
+    /// (where any sibling `.unreadableRoot` overrides `.absent`).
+    static func missingExtrasAreReliable(errorCode: Int32, previouslyObserved: Bool = false) -> Bool {
+        _ = previouslyObserved
         return [AXError.noValue, .attributeUnsupported, .notImplemented]
             .contains { $0.rawValue == errorCode }
     }

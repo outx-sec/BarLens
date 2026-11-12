@@ -10,6 +10,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     private let engine: DividerEngine
     private var hasPresentedOnce = false
+    var onClose: (() -> Void)?
 
     init(engine: DividerEngine) {
         self.engine = engine
@@ -56,6 +57,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         window?.contentViewController = nil
+        window?.delegate = nil
+        let callback = onClose
+        onClose = nil
+        DispatchQueue.main.async {
+            callback?()
+        }
     }
 
     func syncAppearance() {

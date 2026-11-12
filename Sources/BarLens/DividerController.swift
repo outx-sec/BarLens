@@ -18,16 +18,13 @@ import SwiftUI
 final class DividerController: NSObject, NSPopoverDelegate {
 
     private let engine = DividerEngine()
-    private lazy var settings = SettingsWindowController(engine: engine)
-    private lazy var onboarding = OnboardingWindowController(
-        engine: engine,
-        onOpenSettings: { [weak self] pane in
-            self?.settings.present(pane: pane)
-        }
-    )
+    private var settingsController: SettingsWindowController?
+    private var onboardingController: OnboardingWindowController?
 
     private var dotItem: NSStatusItem?
     private var dotPulseBadgeView: DotPulseBadgeView?
+    private var lastRenderedDotSymbol: String?
+    private var lastRenderedDotGlyph: String?
     private var proxyItems: [String: NSStatusItem] = [:]
     private var proxyItemTargets: [String: SystemItem] = [:]
     private var rightClickMonitor: Any?
@@ -60,7 +57,7 @@ final class DividerController: NSObject, NSPopoverDelegate {
         engine.start()             // heartbeat + permission polling
         engine.onChange = { [weak self] in self?.refresh() }
         engine.onReplayOnboarding = { [weak self] in
-            self?.onboarding.present()
+            self?.presentOnboarding()
         }
 
         closeQuickPanel()
@@ -88,13 +85,16 @@ final class DividerController: NSObject, NSPopoverDelegate {
         Defaults.hasShownWelcome = true
         Defaults.hasCompletedOnboarding = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            self?.onboarding.present()
+            self?.presentOnboarding()
         }
     }
 
     func stop() {
         NSWorkspace.shared.notificationCenter.removeObserver(self)
-        onboarding.close()
+        onboardingController?.close()
+        onboardingController = nil
+        settingsController?.close()
+        settingsController = nil
         quickPopover?.animates = false
         closeQuickPanel()
         floatingBar.hide()
@@ -234,6 +234,9 @@ final class DividerController: NSObject, NSPopoverDelegate {
     private func handleScrollOrSwipe(_ event: NSEvent) -> Bool {
         guard abs(event.timestamp - lastHandledScrollTimestamp) > 0.002 else { return false }
         let mouse = NSEvent.mouseLocation
+        if !floatingBar.isShown && !engine.isAppKitPointNearMenuBarBand(mouse) {
+            return false
+        }
         let overDot = isMouseOverDot(at: mouse)
         let overFloatingBar = !overDot && (floatingBar.barCapsuleScreenFrame?.contains(mouse) == true)
         guard overDot || overFloatingBar else { return false }
@@ -391,7 +394,7 @@ final class DividerController: NSObject, NSPopoverDelegate {
             onManage: { [weak self] in self?.openSettings() },
             onOpenGuide: { [weak self] in
                 self?.closeQuickPanel()
-                self?.settings.present(pane: .guide)
+                self?.presentSettings(pane: .guide)
             },
             onReconnect: { [weak self] in self?.reconnectService() },
             onAssign: { [weak self] section in self?.bulkAssign(section) },
@@ -420,6 +423,8 @@ final class DividerController: NSObject, NSPopoverDelegate {
     func popoverDidClose(_ notification: Notification) {
         engine.isQuickPanelOpen = false
         quickPopover?.contentViewController = nil
+        quickPopover?.delegate = nil
+        quickPopover = nil
     }
 
     /// Escape belongs to the panel only. Other app windows and system key
@@ -497,36 +502,49 @@ final class DividerController: NSObject, NSPopoverDelegate {
             // disables macOS's menu-bar wallpaper vibrancy shader, causing the trigger icon
             // to render black and vanish over dark wallpapers when macOS is in Light Mode.
             button.contentTintColor = nil
-            if let symbolName = effectiveSymbolName,
-               let baseImg = NSImage(systemSymbolName: symbolName, accessibilityDescription: "BarLens") {
-                let config = NSImage.SymbolConfiguration(pointSize: 12.5, weight: .semibold)
-                let symbolImg = baseImg.withSymbolConfiguration(config) ?? baseImg
-                symbolImg.isTemplate = true
-                button.title = ""
-                button.attributedTitle = NSAttributedString(string: "")
-                button.image = symbolImg
+            if let symbolName = effectiveSymbolName {
+                if lastRenderedDotSymbol != symbolName,
+                   let baseImg = NSImage(systemSymbolName: symbolName, accessibilityDescription: "BarLens") {
+                    let config = NSImage.SymbolConfiguration(pointSize: 12.5, weight: .semibold)
+                    let symbolImg = baseImg.withSymbolConfiguration(config) ?? baseImg
+                    symbolImg.isTemplate = true
+                    button.title = ""
+                    button.attributedTitle = NSAttributedString(string: "")
+                    button.image = symbolImg
+                    lastRenderedDotSymbol = symbolName
+                    lastRenderedDotGlyph = nil
+                }
             } else {
-                button.image = nil
                 let glyph: String
                 switch engine.reveal {
                 case .none:   glyph = "●"
                 case .hidden: glyph = "○"
                 case .all:    glyph = "◉"
                 }
-                let font = NSFont.systemFont(ofSize: 10, weight: .medium)
-                button.attributedTitle = NSAttributedString(string: "")
-                button.title = glyph
-                button.font = font
+                if lastRenderedDotGlyph != glyph {
+                    button.image = nil
+                    let font = NSFont.systemFont(ofSize: 10, weight: .medium)
+                    button.attributedTitle = NSAttributedString(string: "")
+                    button.title = glyph
+                    button.font = font
+                    lastRenderedDotGlyph = glyph
+                    lastRenderedDotSymbol = nil
+                }
             }
             dotPulseBadgeView?.configure(tone: badgeTone)
             button.appearsDisabled = engine.isRecovering
-            button.toolTip = state + "\n" + gestureHint
-            button.setAccessibilityIdentifier("BarLens.dot")
-            button.setAccessibilityTitle("BarLens.dot")
+            let nextToolTip = state + "\n" + gestureHint
+            if button.toolTip != nextToolTip {
+                button.toolTip = nextToolTip
+            }
+            if button.accessibilityIdentifier() != "BarLens.dot" {
+                button.setAccessibilityIdentifier("BarLens.dot")
+                button.setAccessibilityTitle("BarLens.dot")
+            }
         }
         syncProxyItems()
-        settings.syncAppearance()
-        onboarding.syncAppearance()
+        settingsController?.syncAppearance()
+        onboardingController?.syncAppearance()
         let targetAppearance = engine.effectiveNSAppearance
         quickPopover?.appearance = targetAppearance
         quickPopover?.contentViewController?.view.appearance = targetAppearance
@@ -617,7 +635,44 @@ final class DividerController: NSObject, NSPopoverDelegate {
 
     @objc private func openSettings() {
         closeQuickPanel()
-        settings.present(pane: engine.requestedSettingsPane)
+        presentSettings(pane: engine.requestedSettingsPane)
+    }
+
+    private func presentSettings(pane: SettingsPane? = nil) {
+        let controller: SettingsWindowController
+        if let existing = settingsController {
+            controller = existing
+        } else {
+            let created = SettingsWindowController(engine: engine)
+            created.onClose = { [weak self, weak created] in
+                guard let self, self.settingsController === created else { return }
+                self.settingsController = nil
+            }
+            settingsController = created
+            controller = created
+        }
+        controller.present(pane: pane)
+    }
+
+    private func presentOnboarding() {
+        let controller: OnboardingWindowController
+        if let existing = onboardingController {
+            controller = existing
+        } else {
+            let created = OnboardingWindowController(
+                engine: engine,
+                onOpenSettings: { [weak self] pane in
+                    self?.presentSettings(pane: pane)
+                }
+            )
+            created.onClose = { [weak self, weak created] in
+                guard let self, self.onboardingController === created else { return }
+                self.onboardingController = nil
+            }
+            onboardingController = created
+            controller = created
+        }
+        controller.present()
     }
 
     @objc private func reconnectService() {
