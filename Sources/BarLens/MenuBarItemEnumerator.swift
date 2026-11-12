@@ -483,6 +483,112 @@ enum ItemEnumerator {
         return items
     }
 
+    private static let nonSharingSystemExtraIdentifiers: Set<String> = [
+        "com.apple.menuextra.clock",
+        "com.apple.menuextra.wifi",
+        "com.apple.menuextra.battery",
+        "com.apple.menuextra.bluetooth",
+        "com.apple.menuextra.sound",
+        "com.apple.menuextra.spotlight",
+        "com.apple.menuextra.siri",
+        "com.apple.menuextra.focusmode",
+        "com.apple.menuextra.textinput",
+        "com.apple.menuextra.weather",
+        "com.apple.menuextra.timer",
+        "com.apple.menuextra.passwords",
+        "com.apple.menuextra.user",
+        "com.apple.menuextra.controlcenter",
+        "com.apple.menuextra.airdrop",
+        "com.apple.menuextra.display",
+        "com.apple.menuextra.stagemanager",
+        "com.apple.menuextra.nowplaying",
+        "com.apple.menuextra.timemachine",
+    ]
+
+    /// Lightweight off-main-thread probe of `MenuBarAgent` / `ControlCenter` to check whether
+    /// macOS is currently displaying the active screen-sharing pill (`"当前正在共享"` / `"Currently Sharing"`).
+    /// Invoked only during active capture verification or static-window hold (`0%` idle overhead).
+    static func pollControlCenterScreenShareIndicator(applications: [ItemScanApplication],
+                                                      screens: [(DisplayID, CGRect)],
+                                                      budget: TimeInterval = 0.18) -> Bool {
+        precondition(!Thread.isMainThread, "AX share indicator probe must run off the main thread")
+        guard hasAccessibilityPermission, !screens.isEmpty, !applications.isEmpty else { return false }
+        let reader = AXReadBudget(seconds: budget, cancellation: AXScanCancellation())
+        for application in applications {
+            guard reader.failure == nil else { break }
+            let appEl = AXUIElementCreateApplication(application.pid)
+            guard let extras = try? reader.element(appEl, "AXExtrasMenuBar"),
+                  let children = try? reader.children(extras) else {
+                continue
+            }
+            for (index, child) in children.enumerated() {
+                guard reader.failure == nil else { break }
+                guard let rect = try? frame(of: child, reader: reader),
+                      rect.width > 0, rect.height > 0,
+                      let display = display(containing: rect, in: screens) else {
+                    continue
+                }
+                var identifier = try? AXReadBudget.optionalMetadata {
+                    try reader.string(child, kAXIdentifierAttribute as String)
+                }
+                if identifier == nil, application.bundleID == "com.apple.MenuBarAgent" {
+                    identifier = try? nestedIdentifier(in: child, depth: 0, reader: reader)
+                }
+                if let id = identifier, !id.isEmpty {
+                    let canonical = SystemItemName.canonicalIdentifier(for: id)
+                    identifier = canonical
+                    let lower = canonical.lowercased()
+                    if nonSharingSystemExtraIdentifiers.contains(lower)
+                        || lower.contains("controlcenter")
+                        || lower.contains("bentobox") {
+                        continue
+                    }
+                    if lower.contains("screenrecording")
+                        || lower.contains("screen-recording")
+                        || lower.contains("contentsharing") {
+                        return true
+                    }
+                }
+                var title = try? AXReadBudget.optionalMetadata {
+                    try reader.string(child, kAXTitleAttribute as String)
+                }
+                var desc = try? AXReadBudget.optionalMetadata {
+                    try reader.string(child, kAXDescriptionAttribute as String)
+                }
+                var val = try? AXReadBudget.optionalMetadata {
+                    try reader.string(child, kAXValueAttribute as String)
+                }
+                if (title == nil || title?.isEmpty == true)
+                    && (desc == nil || desc?.isEmpty == true)
+                    && (val == nil || val?.isEmpty == true) {
+                    if let nested = try? nestedTelemetry(in: child, depth: 0, reader: reader) {
+                        if title == nil || title?.isEmpty == true { title = nested.title }
+                        if desc == nil || desc?.isEmpty == true { desc = nested.description }
+                        if val == nil || val?.isEmpty == true { val = nested.value }
+                    }
+                }
+                let nonEmptyTitle = (title?.isEmpty == false) ? title : nil
+                let nonEmptyDesc = (desc?.isEmpty == false) ? desc : nil
+                let item = MenuBarItem(
+                    ownerBundleID: application.bundleID,
+                    ownerPID: application.pid,
+                    frame: rect,
+                    display: display,
+                    axIdentifier: identifier,
+                    label: nonEmptyTitle ?? nonEmptyDesc,
+                    indexInApp: index,
+                    axTitle: nonEmptyTitle,
+                    axDescription: nonEmptyDesc,
+                    axValue: (val?.isEmpty == false) ? val : nil
+                )
+                if DisplayMirrorDetector.hasControlCenterScreenShareIndicator(in: [item]) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
     /// Reads only top-level status/checked menu rows (skipping cascading submenus and
     /// shortcut modifier queries) so background status-bubble polling stays ultra-lightweight.
     private static func readShallowStatusMenuEntries(from statusItem: AXUIElement,

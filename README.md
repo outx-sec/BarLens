@@ -129,7 +129,7 @@ While a visibility restriction is active, `MenuBarAgent` filters allowed items s
 `./build.sh` automatically uses a local `BarLens Dev` certificate if present, or **falls back to ad-hoc signing (`--sign -`)** with a warning so `git clone && ./build.sh` works immediately:
 
 ```bash
-# Run the test suite (83 unit tests)
+# Run the test suite (84 unit tests)
 swift test
 
 # Build and install to /Applications/BarLens.app

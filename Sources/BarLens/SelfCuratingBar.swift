@@ -623,7 +623,7 @@ struct ReplaydTelemetrySample: Equatable {
                                  to current: ReplaydTelemetrySample) -> Bool {
         guard previous.pid == current.pid else { return false }
         let dt = current.timestamp - previous.timestamp
-        guard dt >= 0.35, dt <= 10.0 else { return false }
+        guard dt >= 0.20, dt <= 10.0 else { return false }
 
         let cpuDelta = current.cpuNanoseconds >= previous.cpuNanoseconds
             ? (current.cpuNanoseconds - previous.cpuNanoseconds)
@@ -639,7 +639,7 @@ struct ReplaydTelemetrySample: Equatable {
         let machPerSec = Double(machDelta) / dt
         let cswPerSec = Double(cswDelta) / dt
 
-        return cpuPerSec >= 1_500_000.0 || (machPerSec >= 30.0 && cswPerSec >= 20.0)
+        return cpuPerSec >= 2_500_000.0 || (machPerSec >= 50.0 && cswPerSec >= 30.0)
     }
 }
 
@@ -649,34 +649,57 @@ struct ScreenShareObservation: Equatable {
     var isReplaydStreaming: Bool
     var hasMenuBarIndicator: Bool
 
+    var isActivelyCapturing: Bool {
+        isScreenWatcherActive || isReplaydStreaming
+    }
+
     var isSoftwareSharingCandidate: Bool {
-        isScreenWatcherActive || isReplaydStreaming || hasMenuBarIndicator
+        isActivelyCapturing || hasMenuBarIndicator
     }
 }
 
-/// Debounces OS-level screen-sharing & mirroring signals so:
+/// Debounces OS-level screen-sharing & mirroring signals with dual-track confirmation:
 /// - Hardware HDMI / AirPlay mirroring engages immediately (`1` sample).
-/// - Software screen sharing in any conferencing app or browser (`ScreenCaptureKit` / `CGDisplayStream`)
-///   engages after `2` consecutive positive samples (`~1.2s`), rejecting `< 0.5s` one-shot screenshots (`⌘⇧4`).
-/// - Brief pauses while switching shared windows hold steady across `releaseGraceTicks` (`~3.6s`).
+/// - Authoritative Indicator Fast-Path (`~0.55s – 0.80s`): when active stream capture
+///   (`replayd` / `WindowServer`) coincides with `MenuBarAgent`'s active sharing pill
+///   (`"当前正在共享"` / `"Currently Sharing"`, which `replayd` only publishes via
+///   `RPClientProxy` on `startCapture` and never on window-picker `approveOnScreenshot`),
+///   shield engages after `indicatorFastPathTicks` (`2` fast samples).
+/// - Universal Stream Fallback (`~1.85s`): when the menu bar pill is suppressed or unavailable,
+///   unbroken high-cadence (`0.25s`) capture across `activationConfirmationTicks` (`7` samples)
+///   AND `minimumSustainedDuration` (`1.85s`) engages cleanly while rejecting `< 1.5s` bursts
+///   from conferencing app startup preflights, "Start Share" picker thumbnails, and screenshots.
+/// - Static-Window Hold & Smooth Release: once active, `hasMenuBarIndicator` keeps the shield
+///   steady even on 0-fps static slides, and stopping share releases after `releaseGraceTicks` (`~1.65s`).
 struct ScreenShareSessionMonitor {
     let activationConfirmationTicks: Int
+    let indicatorFastPathTicks: Int
     let releaseGraceTicks: Int
     let minSampleInterval: TimeInterval
+    let minimumSustainedDuration: TimeInterval
 
     private(set) var activeSource: ScreenPresentationSource?
     private var previousReplaydSample: ReplaydTelemetrySample?
     private var lastReplaydStreaming: Bool = false
     private var lastSoftwareStepAt: TimeInterval?
+    private var candidateStartedAt: TimeInterval?
     private var softwarePositiveStreak: Int = 0
     private var softwareInactiveStreak: Int = 0
 
-    init(activationConfirmationTicks: Int = 2,
+    var hasPendingCandidate: Bool {
+        activeSource == nil && softwarePositiveStreak > 0
+    }
+
+    init(activationConfirmationTicks: Int = 7,
+         indicatorFastPathTicks: Int = 2,
          releaseGraceTicks: Int = 3,
-         minSampleInterval: TimeInterval = 0.45) {
+         minSampleInterval: TimeInterval = 0.20,
+         minimumSustainedDuration: TimeInterval = 1.85) {
         self.activationConfirmationTicks = max(1, activationConfirmationTicks)
+        self.indicatorFastPathTicks = max(1, indicatorFastPathTicks)
         self.releaseGraceTicks = max(1, releaseGraceTicks)
         self.minSampleInterval = max(0.1, minSampleInterval)
+        self.minimumSustainedDuration = max(0, minimumSustainedDuration)
     }
 
     mutating func reset() {
@@ -684,6 +707,7 @@ struct ScreenShareSessionMonitor {
         previousReplaydSample = nil
         lastReplaydStreaming = false
         lastSoftwareStepAt = nil
+        candidateStartedAt = nil
         softwarePositiveStreak = 0
         softwareInactiveStreak = 0
     }
@@ -715,6 +739,7 @@ struct ScreenShareSessionMonitor {
         if observation.isHardwareMirrored {
             softwarePositiveStreak = 0
             softwareInactiveStreak = 0
+            candidateStartedAt = nil
             lastSoftwareStepAt = now
             activeSource = .hardwareMirror
             return activeSource
@@ -723,15 +748,48 @@ struct ScreenShareSessionMonitor {
         if let now, let lastAt = lastSoftwareStepAt, now >= lastAt, (now - lastAt) < minSampleInterval {
             if activeSource == .hardwareMirror {
                 activeSource = observation.isSoftwareSharingCandidate ? .softwareScreenShare : nil
+            } else if activeSource == nil,
+                      observation.isActivelyCapturing,
+                      observation.hasMenuBarIndicator,
+                      softwarePositiveStreak >= indicatorFastPathTicks {
+                activeSource = .softwareScreenShare
             }
             return activeSource
         }
         lastSoftwareStepAt = now
 
-        if observation.isSoftwareSharingCandidate {
+        if activeSource == .softwareScreenShare {
+            if observation.isSoftwareSharingCandidate {
+                softwareInactiveStreak = 0
+                return activeSource
+            }
+            softwarePositiveStreak = 0
+            candidateStartedAt = nil
+            softwareInactiveStreak += 1
+            if softwareInactiveStreak >= releaseGraceTicks {
+                softwareInactiveStreak = 0
+                activeSource = nil
+            }
+            return activeSource
+        }
+
+        if observation.isActivelyCapturing {
             softwareInactiveStreak = 0
+            if softwarePositiveStreak == 0 {
+                candidateStartedAt = now
+            }
             softwarePositiveStreak += 1
-            if activeSource == .softwareScreenShare || softwarePositiveStreak >= activationConfirmationTicks {
+            let metFastPath = observation.hasMenuBarIndicator
+                && softwarePositiveStreak >= indicatorFastPathTicks
+            let metDuration: Bool
+            if minimumSustainedDuration <= 0 {
+                metDuration = true
+            } else if let now, let started = candidateStartedAt {
+                metDuration = (now - started) >= minimumSustainedDuration
+            } else {
+                metDuration = softwarePositiveStreak >= activationConfirmationTicks
+            }
+            if metFastPath || (softwarePositiveStreak >= activationConfirmationTicks && metDuration) {
                 activeSource = .softwareScreenShare
             } else if activeSource == .hardwareMirror {
                 activeSource = .softwareScreenShare
@@ -740,18 +798,10 @@ struct ScreenShareSessionMonitor {
         }
 
         softwarePositiveStreak = 0
-        switch activeSource {
-        case .none:
-            softwareInactiveStreak = 0
-        case .hardwareMirror:
-            softwareInactiveStreak = 0
-            activeSource = nil
-        case .softwareScreenShare:
-            softwareInactiveStreak += 1
-            if softwareInactiveStreak >= releaseGraceTicks {
-                softwareInactiveStreak = 0
-                activeSource = nil
-            }
+        candidateStartedAt = nil
+        softwareInactiveStreak = 0
+        if activeSource == .hardwareMirror {
+            activeSource = observation.hasMenuBarIndicator ? .softwareScreenShare : nil
         }
         return activeSource
     }
@@ -777,23 +827,26 @@ enum DisplayMirrorDetector {
 
     private static let localizedScreenSharePhrases: [String] = {
         var phrases: Set<String> = [
-            "screen recording",
-            "screen & system audio recording",
             "currently sharing",
             "content sharing",
             "is capturing your screen",
-            "录屏",
-            "录屏与系统录音",
+            "currently being shared",
+            "viewing my screen",
             "当前正在共享",
             "内容共享",
             "正在捕捉你的屏幕",
+            "当前正被共享",
+            "正在观看我的屏幕",
         ]
         if let bundle = Bundle(path: "/System/Library/CoreServices/ControlCenter.app") {
+            // Deliberately exclude `SensorIndicators` ("录屏" / "Screen Recording"), which
+            // `STMediaStatusDomainPublisher` lights up on one-shot `CGWindowListCreateImage`
+            // screenshots (such as opening a share-picker grid) and lingers for ~15s.
+            // Only match active session strings published via `RPClientProxy` (`AudioVideo*` / `FaceTime`).
             let queries: [(table: String, keys: [String])] = [
-                ("SensorIndicators", ["Screen Recording", "Screen & System Audio Recording"]),
                 ("AudioVideoLiveActivities", ["Currently Sharing", "Content Sharing", "%@ is capturing your screen."]),
                 ("AudioVideo", ["Currently Sharing", "%@ is capturing your screen."]),
-                ("FaceTime", ["Currently Sharing", "Screen Sharing"]),
+                ("FaceTime", ["Currently Sharing", "Currently Being Shared", "Viewing My Screen"]),
             ]
             for query in queries {
                 for key in query.keys {
@@ -869,14 +922,18 @@ enum DisplayMirrorDetector {
         )
     }
 
-    /// Checks whether `MenuBarAgent` / `ControlCenter` is currently exposing a system screen-sharing
-    /// or screen-recording indicator in its Accessibility menu bar extras (across all system locales),
-    /// while ignoring camera/microphone-only call indicators.
+    /// Checks whether `MenuBarAgent` / `ControlCenter` is currently exposing an active system
+    /// screen-sharing or video-recording pill in its Accessibility menu bar extras (across all
+    /// system locales), while ignoring `ControlCenter` (`BentoBox`) sensor dots and mic/cam-only calls.
     static func hasControlCenterScreenShareIndicator(in items: [MenuBarItem]) -> Bool {
         for item in items where item.ownerBundleID == "com.apple.MenuBarAgent" || item.ownerBundleID == "com.apple.controlcenter" {
-            if let axID = item.axIdentifier?.lowercased(),
-               axID.contains("screenrecording") || axID.contains("screen-recording") || axID.contains("contentsharing") {
-                return true
+            if let axID = item.axIdentifier?.lowercased() {
+                if axID.contains("controlcenter") || axID.contains("bentobox") {
+                    continue
+                }
+                if axID.contains("screenrecording") || axID.contains("screen-recording") || axID.contains("contentsharing") {
+                    return true
+                }
             }
             let candidates = [item.axTitle, item.axDescription, item.axValue, item.label]
                 .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }

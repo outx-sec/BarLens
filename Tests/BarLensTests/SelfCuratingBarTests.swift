@@ -434,7 +434,12 @@ final class SelfCuratingBarTests: XCTestCase {
     }
 
     func testConferencingScreenShareDetectionRejectsScreenshotsAndVoiceCalls() {
-        var monitor = ScreenShareSessionMonitor(activationConfirmationTicks: 2, releaseGraceTicks: 3, minSampleInterval: 0.45)
+        var monitor = ScreenShareSessionMonitor(
+            activationConfirmationTicks: 2,
+            releaseGraceTicks: 3,
+            minSampleInterval: 0.45,
+            minimumSustainedDuration: 1.0
+        )
         let pid: pid_t = 737
         let t0: TimeInterval = 1_750_300_000
 
@@ -552,6 +557,84 @@ final class SelfCuratingBarTests: XCTestCase {
             isReplaydStreaming: false,
             hasMenuBarIndicator: false
         ), now: t0 + 11.0), .hardwareMirror)
+    }
+
+    func testDefaultScreenShareMonitorRejectsAppLaunchPreflightAndSharePickerThumbnails() {
+        // Exercises exact production defaults (`0.25s` fast verification cadence,
+        // `indicatorFastPathTicks = 2`, `activationConfirmationTicks = 7`, `minimumSustainedDuration = 1.85`)
+        var monitor = ScreenShareSessionMonitor()
+        let pickerBurstObs = ScreenShareObservation(
+            isHardwareMirrored: false,
+            isScreenWatcherActive: false,
+            isReplaydStreaming: true,
+            hasMenuBarIndicator: false
+        )
+        let confirmedPillObs = ScreenShareObservation(
+            isHardwareMirrored: false,
+            isScreenWatcherActive: false,
+            isReplaydStreaming: true,
+            hasMenuBarIndicator: true
+        )
+        let staticSlideHoldObs = ScreenShareObservation(
+            isHardwareMirrored: false,
+            isScreenWatcherActive: false,
+            isReplaydStreaming: false,
+            hasMenuBarIndicator: true
+        )
+        let idleObs = ScreenShareObservation(
+            isHardwareMirrored: false,
+            isScreenWatcherActive: false,
+            isReplaydStreaming: false,
+            hasMenuBarIndicator: false
+        )
+        let t0: TimeInterval = 1_750_500_000
+
+        // 0. ControlCenter BentoBox sensor dot ("录屏" / "Screen Recording" from one-shot screenshots)
+        //    must NOT count as an active screen-sharing session pill
+        let bentoSensorDot = MenuBarItem(
+            ownerBundleID: "com.apple.MenuBarAgent",
+            ownerPID: 687,
+            frame: CGRect(x: 1940, y: 0, width: 28, height: 24),
+            display: DisplayID(rawValue: 1, localizedName: "Main"),
+            axIdentifier: "com.apple.menuextra.controlcenter",
+            label: "控制中心",
+            indexInApp: 1,
+            axTitle: "控制中心",
+            axDescription: "录屏",
+            axValue: "Screen Recording"
+        )
+        XCTAssertFalse(DisplayMirrorDetector.hasControlCenterScreenShareIndicator(in: [bentoSensorDot]))
+
+        // 1. Opening "Start Share" picker (`approveOnScreenshot` ~1.50s across 6 fast 0.25s ticks, no share pill) must NOT trigger
+        for step in 0..<6 {
+            XCTAssertNil(monitor.update(with: pickerBurstObs, now: t0 + Double(step) * 0.25))
+            XCTAssertTrue(monitor.hasPendingCandidate)
+        }
+        XCTAssertNil(monitor.update(with: idleObs, now: t0 + 1.50))
+        XCTAssertFalse(monitor.hasPendingCandidate)
+
+        // 2. Confirmed screen share with live MenuBarAgent pill ("当前正在共享") engages via fast-path in ~0.45s!
+        XCTAssertNil(monitor.update(with: pickerBurstObs, now: t0 + 10.00))
+        XCTAssertNil(monitor.update(with: pickerBurstObs, now: t0 + 10.25))
+        // Async MenuBarAgent probe completes 20ms later -> promotes immediately without waiting for 1.85s!
+        XCTAssertEqual(monitor.update(with: confirmedPillObs, now: t0 + 10.27), .softwareScreenShare)
+        XCTAssertFalse(monitor.hasPendingCandidate)
+
+        // 3. Static 0-fps shared slide/PDF holds steady as long as MenuBarAgent sharing pill remains active
+        for step in 1...5 {
+            XCTAssertEqual(monitor.update(with: staticSlideHoldObs, now: t0 + 10.27 + Double(step) * 0.55), .softwareScreenShare)
+        }
+
+        // 4. Stopping share clears both stream and pill -> releases cleanly after `releaseGraceTicks = 3` (~1.65s)
+        XCTAssertEqual(monitor.update(with: idleObs, now: t0 + 14.00), .softwareScreenShare)
+        XCTAssertEqual(monitor.update(with: idleObs, now: t0 + 14.55), .softwareScreenShare)
+        XCTAssertNil(monitor.update(with: idleObs, now: t0 + 15.10))
+
+        // 5. Fallback path (when MenuBarAgent pill is suppressed/unavailable) still confirms cleanly at >= 1.85s
+        for step in 0..<7 {
+            XCTAssertNil(monitor.update(with: pickerBurstObs, now: t0 + 20.00 + Double(step) * 0.25))
+        }
+        XCTAssertEqual(monitor.update(with: pickerBurstObs, now: t0 + 20.00 + 2.00), .softwareScreenShare)
     }
 
     func testStatusBubbleDwellPoliciesDistinguishActionableUnreadFromTransientStateFlips() {

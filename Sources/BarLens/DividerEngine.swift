@@ -96,7 +96,14 @@ final class DividerEngine: ObservableObject {
     private var mirroringShieldDismissedForSession = false
     private var screenShareMonitor = ScreenShareSessionMonitor()
     private var cachedReplaydPID: pid_t?
+    private var cachedControlCenterHosts: [ItemScanApplication] = []
     private var screenShareTimer: Timer?
+    private var screenShareTimerInterval: TimeInterval = 0
+    private var liveMenuBarShareIndicator = false
+    private var liveMenuBarShareIndicatorUpdatedAt: TimeInterval = 0
+    private var isPollingMenuBarShareIndicator = false
+    private var lastMenuBarShareIndicatorProbeAt: TimeInterval = 0
+    private static let screenShareProbeQueue = DispatchQueue(label: "com.barlens.screenshare-probe", qos: .userInitiated)
     private var statusBubbleTracker = StatusBubbleTracker()
     private var statusBubbleExpiryTimer: Timer?
     private var statusBubblePollTimer: Timer?
@@ -608,6 +615,10 @@ final class DividerEngine: ObservableObject {
         isPollingStatusBubbles = false
         screenShareTimer?.invalidate()
         screenShareTimer = nil
+        screenShareTimerInterval = 0
+        liveMenuBarShareIndicator = false
+        liveMenuBarShareIndicatorUpdatedAt = 0
+        isPollingMenuBarShareIndicator = false
         if let localMouseDownMonitor {
             NSEvent.removeMonitor(localMouseDownMonitor)
             self.localMouseDownMonitor = nil
@@ -669,6 +680,9 @@ final class DividerEngine: ObservableObject {
             guard let self else { return }
             self.isSleeping = true
             self.screenShareMonitor.reset()
+            self.liveMenuBarShareIndicator = false
+            self.liveMenuBarShareIndicatorUpdatedAt = 0
+            self.isPollingMenuBarShareIndicator = false
             self.diagnosticLog.record(event: "system_will_sleep")
             self.recoveryStartedAt = nil
             self.recoveryStartedUptime = nil
@@ -1901,13 +1915,78 @@ final class DividerEngine: ObservableObject {
     }
 
     private func startScreenShareMonitoring() {
+        screenShareTimerInterval = 0
+        updateScreenShareTimerCadence()
+    }
+
+    private func desiredScreenSharePollInterval() -> TimeInterval {
+        if screenShareMonitor.hasPendingCandidate {
+            return 0.25
+        }
+        if screenShareMonitor.activeSource == .softwareScreenShare {
+            return 0.55
+        }
+        return 0.50
+    }
+
+    private func updateScreenShareTimerCadence() {
+        guard isStarted else { return }
+        let desired = desiredScreenSharePollInterval()
+        if let screenShareTimer, screenShareTimer.isValid, abs(screenShareTimerInterval - desired) < 0.01 {
+            return
+        }
         screenShareTimer?.invalidate()
-        screenShareTimer = Timer.scheduledTimer(withTimeInterval: 1.2, repeats: true) { [weak self] _ in
+        screenShareTimerInterval = desired
+        screenShareTimer = Timer.scheduledTimer(withTimeInterval: desired, repeats: true) { [weak self] _ in
             guard let self, self.isStarted, !self.isSleeping else { return }
             self.refreshDisplayMirroringState(applyIfNeeded: true)
         }
         if let screenShareTimer {
             RunLoop.main.add(screenShareTimer, forMode: .common)
+        }
+    }
+
+    private func resolveControlCenterHostApplications() -> [ItemScanApplication] {
+        cachedControlCenterHosts.removeAll { $0.pid <= 0 || kill($0.pid, 0) != 0 }
+        if cachedControlCenterHosts.isEmpty {
+            var resolved: [ItemScanApplication] = []
+            for bundleID in ["com.apple.MenuBarAgent", "com.apple.controlcenter"] {
+                for app in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID) where app.processIdentifier > 0 {
+                    resolved.append(ItemScanApplication(pid: app.processIdentifier, bundleID: bundleID))
+                }
+            }
+            cachedControlCenterHosts = resolved
+        }
+        return cachedControlCenterHosts
+    }
+
+    private func pollMenuBarShareIndicatorIfNeeded(now: TimeInterval) {
+        guard !isPollingMenuBarShareIndicator,
+              (now - lastMenuBarShareIndicatorProbeAt) >= 0.18 else { return }
+        let hosts = resolveControlCenterHostApplications()
+        let screens = ItemEnumerator.displayFrames()
+        guard !hosts.isEmpty, !screens.isEmpty, ItemEnumerator.hasAccessibilityPermission else { return }
+
+        isPollingMenuBarShareIndicator = true
+        lastMenuBarShareIndicatorProbeAt = now
+        Self.screenShareProbeQueue.async { [weak self] in
+            let indicator = ItemEnumerator.pollControlCenterScreenShareIndicator(
+                applications: hosts,
+                screens: screens,
+                budget: 0.18
+            )
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isPollingMenuBarShareIndicator = false
+                guard self.isStarted, !self.isSleeping else { return }
+                let completedAt = Date().timeIntervalSince1970
+                let previous = self.liveMenuBarShareIndicator
+                self.liveMenuBarShareIndicator = indicator
+                self.liveMenuBarShareIndicatorUpdatedAt = completedAt
+                if indicator && !previous && self.screenShareMonitor.hasPendingCandidate {
+                    self.refreshDisplayMirroringState(applyIfNeeded: true)
+                }
+            }
         }
     }
 
@@ -1918,7 +1997,21 @@ final class DividerEngine: ObservableObject {
         let watcherActive = DisplayMirrorDetector.isWindowServerScreenWatcherActive()
         let replaydSample = DisplayMirrorDetector.sampleReplaydTelemetry(now: now, cachedPID: &cachedReplaydPID)
         let replaydStreaming = screenShareMonitor.ingestReplaydSample(replaydSample)
-        let menuBarIndicator = DisplayMirrorDetector.hasControlCenterScreenShareIndicator(in: latestScanItems ?? retainedScanItems)
+
+        let activelyCapturing = watcherActive || replaydStreaming
+        if !hardwareMirrored {
+            if screenShareMonitor.activeSource == nil && activelyCapturing {
+                pollMenuBarShareIndicatorIfNeeded(now: now)
+            } else if screenShareMonitor.activeSource == .softwareScreenShare && !activelyCapturing {
+                pollMenuBarShareIndicatorIfNeeded(now: now)
+            } else if screenShareMonitor.activeSource == nil && !activelyCapturing {
+                liveMenuBarShareIndicator = false
+                liveMenuBarShareIndicatorUpdatedAt = 0
+            }
+        }
+        let menuBarIndicator = (now - liveMenuBarShareIndicatorUpdatedAt) <= 1.5
+            ? liveMenuBarShareIndicator
+            : false
 
         let source = screenShareMonitor.update(
             with: ScreenShareObservation(
@@ -1929,6 +2022,8 @@ final class DividerEngine: ObservableObject {
             ),
             now: now
         )
+        updateScreenShareTimerCadence()
+
         let presenting = (source != nil)
         if !presenting {
             mirroringShieldDismissedForSession = false
