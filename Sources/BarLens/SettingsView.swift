@@ -7,6 +7,7 @@ import SwiftUI
 /// window turning into one long scroll.
 enum SettingsPane: String, CaseIterable, Identifiable {
     case sections
+    case smart
     case appearance
     case general
     case guide
@@ -17,6 +18,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .sections:   return tr("分区管理", "Sections")
+        case .smart:      return tr("智能自治", "Smart Bar")
         case .appearance: return tr("外观", "Appearance")
         case .general:    return tr("通用", "General")
         case .guide:      return tr("使用指南", "Guide")
@@ -27,6 +29,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .sections:   return "rectangle.3.group"
+        case .smart:      return "wand.and.stars"
         case .appearance: return "sparkles"
         case .general:    return "gearshape"
         case .guide:      return "book.closed"
@@ -59,6 +62,7 @@ struct SettingsView: View {
                 Banners(engine: engine)
                 switch pane {
                 case .sections:   SectionsSettingsView(engine: engine, catalog: catalog)
+                case .smart:      SmartBarSettingsView(engine: engine, catalog: catalog)
                 case .appearance: AppearanceSettingsView(engine: engine)
                 case .general:    GeneralSettingsView(engine: engine, catalog: catalog)
                 case .guide:      GuideSettingsView(engine: engine)
@@ -121,7 +125,7 @@ struct SettingsView: View {
             .padding(.top, 8)
 
             VStack(spacing: 5) {
-                ForEach([SettingsPane.sections, .appearance, .general, .guide, .about]) { item in
+                ForEach(SettingsPane.allCases) { item in
                     let isSelected = pane == item
                     Button {
                         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {

@@ -493,10 +493,14 @@ private struct AppRow: View {
                     BadgeTag(text: tr("默认", "Default"))
                 }
 
-                if entry.isRunning && engine.overflowDemotedBundleIDs.contains(entry.bundleID) {
+                if entry.isRunning && engine.shieldedBundleIDs.contains(entry.bundleID) {
+                    BadgeTag(text: tr("净空暂收", "Shielded"), tone: .indigo)
+                } else if entry.isRunning && engine.overflowDemotedBundleIDs.contains(entry.bundleID) {
                     BadgeTag(text: tr("容量暂收", "Tucked"), tone: .teal)
-                } else if entry.section == .visible && engine.isSpatiallyExempt(entry.bundleID) && engine.spatialBudgetPolicy != .off {
+                } else if entry.section == .visible && engine.isSpatiallyExempt(entry.bundleID) && engine.hasActivePinningConsumers {
                     BadgeTag(text: tr("已锁常驻", "Pinned"), tone: .blue)
+                } else if entry.section == .hidden && engine.autoDecayedBundleIDs.contains(entry.bundleID) {
+                    BadgeTag(text: tr("闲置收纳", "Auto-Tucked"), tone: .purple)
                 }
 
                 if entry.isRunning && engine.lensTelemetryEnabled {
@@ -569,7 +573,7 @@ private struct AppRow: View {
                     Label(section.title, systemImage: section.symbol)
                 }
             }
-            if entry.section == .visible && engine.spatialBudgetPolicy != .off {
+            if entry.section == .visible && engine.hasActivePinningConsumers {
                 Divider()
                 let exempt = engine.isSpatiallyExempt(entry.bundleID)
                 Button {
@@ -578,7 +582,7 @@ private struct AppRow: View {
                     Label(
                         exempt
                             ? tr("取消顶栏锁定常驻", "Unpin from Top Bar")
-                            : tr("锁定顶栏常驻（免暂收）", "Pin to Top Bar (Never Tuck)"),
+                            : tr("锁定顶栏常驻", "Pin to Top Bar"),
                         systemImage: exempt ? "pin.slash" : "pin.fill"
                     )
                 }

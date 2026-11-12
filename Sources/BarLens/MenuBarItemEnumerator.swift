@@ -363,6 +363,182 @@ enum ItemEnumerator {
         return result
     }
 
+    struct SemanticPollSnapshot {
+        var rawByOwner: [String: [RawAXItemTelemetry]] = [:]
+        var dockBadges: [String: String] = [:]
+        var completedOwners: Set<String> = []
+    }
+
+    /// Lightweight off-main-thread poll of status-item semantic telemetry and Dock
+    /// unread badges for a targeted set of hidden/tucked bundle identifiers.
+    /// Does not require an on-screen display match so status items parked off-screen
+    /// while hidden by `MBAssessmentModeAssertion` still report live text and menu changes.
+    static func pollSemanticSnapshot(applications: [ItemScanApplication],
+                                     dockPID: pid_t?,
+                                     budget: TimeInterval = 1.4) -> SemanticPollSnapshot {
+        precondition(!Thread.isMainThread, "AX semantic polling must run off the main thread")
+        guard hasAccessibilityPermission else { return SemanticPollSnapshot() }
+        let reader = AXReadBudget(seconds: budget, cancellation: AXScanCancellation())
+        var snapshot = SemanticPollSnapshot()
+
+        for application in applications {
+            guard reader.failure == nil else { break }
+            do {
+                let appElement = AXUIElementCreateApplication(application.pid)
+                let extras = try reader.element(appElement, "AXExtrasMenuBar")
+                let children = try reader.children(extras)
+                var ownerItems: [RawAXItemTelemetry] = []
+                for (index, child) in children.enumerated() {
+                    guard reader.failure == nil else { break }
+                    if let rect = try? frame(of: child, reader: reader),
+                       (rect.width <= 0 || rect.height <= 0) {
+                        continue
+                    }
+                    let identifier = try AXReadBudget.optionalMetadata {
+                        try reader.string(child, kAXIdentifierAttribute as String)
+                    }
+                    var title = try AXReadBudget.optionalMetadata {
+                        try reader.string(child, kAXTitleAttribute as String)
+                    }
+                    var desc = try AXReadBudget.optionalMetadata {
+                        try reader.string(child, kAXDescriptionAttribute as String)
+                    }
+                    var val = try AXReadBudget.optionalMetadata {
+                        try reader.string(child, kAXValueAttribute as String)
+                    }
+                    let help = try AXReadBudget.optionalMetadata {
+                        try reader.string(child, kAXHelpAttribute as String)
+                    }
+                    if (title == nil || title?.isEmpty == true)
+                        && (desc == nil || desc?.isEmpty == true)
+                        && (val == nil || val?.isEmpty == true) {
+                        let nested = try nestedTelemetry(in: child, depth: 0, reader: reader)
+                        if title == nil || title?.isEmpty == true { title = nested.title }
+                        if desc == nil || desc?.isEmpty == true { desc = nested.description }
+                        if val == nil || val?.isEmpty == true { val = nested.value }
+                    }
+                    let menuEntries = try readShallowStatusMenuEntries(
+                        from: child,
+                        statusItemIndex: index,
+                        reader: reader
+                    )
+                    ownerItems.append(RawAXItemTelemetry(
+                        indexInApp: index,
+                        identifier: (identifier?.isEmpty == false) ? identifier : nil,
+                        title: (title?.isEmpty == false) ? title : nil,
+                        description: (desc?.isEmpty == false) ? desc : nil,
+                        value: (val?.isEmpty == false) ? val : nil,
+                        help: (help?.isEmpty == false) ? help : nil,
+                        menuEntries: menuEntries
+                    ))
+                }
+                if reader.failure == nil {
+                    snapshot.rawByOwner[application.bundleID, default: []] += ownerItems
+                    snapshot.completedOwners.insert(application.bundleID)
+                }
+            } catch {
+                continue
+            }
+        }
+
+        if reader.failure == nil, let dockPID, dockPID > 0 {
+            snapshot.dockBadges = readDockBadges(dockPID: dockPID, reader: reader)
+        }
+        return snapshot
+    }
+
+    /// Reads the current live on-screen status-item geometries for newly surfaced top-bar
+    /// status bubbles so `TopBarClickTracker` can match user clicks on surfaced icons accurately.
+    static func readLiveStatusItemFrames(applications: [ItemScanApplication],
+                                         screens: [(DisplayID, CGRect)],
+                                         budget: TimeInterval = 0.8) -> [MenuBarItem] {
+        precondition(!Thread.isMainThread, "AX frame read must run off the main thread")
+        guard hasAccessibilityPermission, !screens.isEmpty else { return [] }
+        let reader = AXReadBudget(seconds: budget, cancellation: AXScanCancellation())
+        var items: [MenuBarItem] = []
+        for application in applications {
+            guard reader.failure == nil else { break }
+            let appEl = AXUIElementCreateApplication(application.pid)
+            guard let extras = try? reader.element(appEl, "AXExtrasMenuBar"),
+                  let children = try? reader.children(extras) else {
+                continue
+            }
+            for (index, child) in children.enumerated() {
+                guard let rect = try? frame(of: child, reader: reader),
+                      rect.width > 0, rect.height > 0,
+                      let display = display(containing: rect, in: screens) else {
+                    continue
+                }
+                items.append(MenuBarItem(
+                    ownerBundleID: application.bundleID,
+                    ownerPID: application.pid,
+                    frame: rect,
+                    display: display,
+                    axIdentifier: nil,
+                    label: nil,
+                    indexInApp: index
+                ))
+            }
+        }
+        return items
+    }
+
+    /// Reads only top-level status/checked menu rows (skipping cascading submenus and
+    /// shortcut modifier queries) so background status-bubble polling stays ultra-lightweight.
+    private static func readShallowStatusMenuEntries(from statusItem: AXUIElement,
+                                                     statusItemIndex: Int,
+                                                     reader: AXReadBudget) throws -> [AXMenuSnapshotEntry] {
+        guard let subChildren = try AXReadBudget.optionalValue({ try reader.children(statusItem) }),
+              !subChildren.isEmpty else {
+            return []
+        }
+        var rootMenu: AXUIElement?
+        for child in subChildren.prefix(4) {
+            let role = try AXReadBudget.optionalMetadata {
+                try reader.string(child, kAXRoleAttribute as String)
+            }
+            if role == (kAXMenuRole as String) {
+                rootMenu = child
+                break
+            }
+        }
+        guard let rootMenu,
+              let menuItems = try AXReadBudget.optionalValue({ try reader.children(rootMenu) }),
+              !menuItems.isEmpty else {
+            return []
+        }
+        var entries: [AXMenuSnapshotEntry] = []
+        for (menuIndex, itemElement) in menuItems.prefix(10).enumerated() {
+            guard reader.failure == nil else { break }
+            let rawTitle = try AXReadBudget.optionalMetadata {
+                try reader.string(itemElement, kAXTitleAttribute as String)
+            }
+            guard let title = rawTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !title.isEmpty else {
+                continue
+            }
+            let enabled = (try AXReadBudget.optionalValue {
+                try reader.bool(itemElement, kAXEnabledAttribute as String)
+            }) ?? true
+            let mark = try AXReadBudget.optionalMetadata {
+                try reader.string(itemElement, "AXMenuItemMarkChar")
+            }
+            let hasMark = (mark?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+            guard !enabled || hasMark else { continue }
+            entries.append(AXMenuSnapshotEntry(
+                statusItemIndex: statusItemIndex,
+                menuPath: [menuIndex],
+                titlePath: [title],
+                title: title,
+                isEnabled: enabled,
+                markChar: hasMark ? mark : nil,
+                shortcutHint: nil,
+                children: []
+            ))
+        }
+        return entries
+    }
+
     /// An app that never exposed Accessibility is not a failed menu-bar read.
     /// A previously observed owner disappearing is ambiguous and must be kept
     /// until a later reliable snapshot (or process exit) resolves it.
@@ -995,7 +1171,7 @@ enum ItemEnumerator {
         return maxOffsetFromLeft > 40 ? maxOffsetFromLeft : nil
     }
 
-    private static func displayFrames() -> [(DisplayID, CGRect)] {
+    static func displayFrames() -> [(DisplayID, CGRect)] {
         guard let main = NSScreen.screens.first else { return [] }
         return NSScreen.screens.compactMap { screen in
             guard let id = displayID(for: screen) else { return nil }

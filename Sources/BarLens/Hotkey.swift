@@ -59,17 +59,19 @@ struct Hotkey: Codable, Equatable {
     }
 }
 
-/// The two things a shortcut can be bound to.
+/// Actions a global keyboard shortcut can be bound to.
 enum HotkeyAction: String, CaseIterable, Identifiable, Codable {
     case toggleHidden
     case toggleAlwaysHidden
+    case togglePresentationShield
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .toggleHidden:       return tr("展开 / 收起可隐藏", "Toggle Hidden")
-        case .toggleAlwaysHidden: return tr("展开 / 收起永久隐藏", "Toggle Always Hidden")
+        case .toggleHidden:             return tr("展开 / 收起可隐藏", "Toggle Hidden")
+        case .toggleAlwaysHidden:       return tr("展开 / 收起永久隐藏", "Toggle Always Hidden")
+        case .togglePresentationShield: return tr("开启 / 退出投屏净空盾", "Toggle Presentation Shield")
         }
     }
 }

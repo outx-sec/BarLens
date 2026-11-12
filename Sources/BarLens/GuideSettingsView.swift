@@ -10,6 +10,7 @@ struct GuideSettingsView: View {
         Form {
             heroSection
             quickStartSection
+            smartBarSection
             triggerGesturesSection
             floatingBarSection
             faqSection
@@ -109,6 +110,47 @@ struct GuideSettingsView: View {
                 actionTitle: tr("前往外观", "Open Appearance"),
                 action: { engine.requestedSettingsPane = .appearance }
             )
+        }
+    }
+
+    // MARK: - Self-Curating Smart Bar
+
+    private var smartBarSection: some View {
+        Section(tr("智能自治顶栏（零录屏权限）", "Self-Curating Smart Bar (Zero Screen Recording)")) {
+            GuideItemRow(
+                symbol: "shield.lefthalf.filled",
+                tone: .indigo,
+                title: tr("投屏与会议共享净空盾", "Presentation & Screen-Sharing Shield"),
+                detail: tr(
+                    "检测到会议软件共享屏幕、浏览器投屏或硬件镜像 / AirPlay 时自动隐去第三方图标（纯语音/视频通话不误触），也可通过速览面板或全局快捷键一键开启，结束投屏后原位恢复。",
+                    "Automatically hides third-party icons during conferencing screen shares, browser casting, or display mirroring / AirPlay (without false-triggering on voice/camera calls), or toggle anytime via Quick Panel or shortcut."
+                )
+            )
+            GuideItemRow(
+                symbol: "bell.badge.waveform",
+                tone: .orange,
+                title: tr("隐藏项状态突变冒泡", "Zero-Capture Status Pulse"),
+                detail: tr(
+                    "当隐藏应用出现新未读消息、状态告警或离散状态切换时，支持「智能驻留」（未读与告警保持浮现直至点击/切入应用/已读清零，状态变更轻快展示后收起），同时自动静音网速计与滚动歌词。",
+                    "Intelligently surfaces hidden apps on new unread badges, alerts, or state flips—keeping unread/alerts visible until handled while auto-tucking transient flips and muting rate meters & lyrics."
+                )
+            )
+            GuideItemRow(
+                symbol: "sparkles.rectangle.stack",
+                tone: .purple,
+                title: tr("低频自沉淀与「锁定常驻」豁免", "Usage Auto-Decay & Top-Bar Pinning"),
+                detail: tr(
+                    "超过 3/7/14/30 天未点击的顶栏图标自动沉淀至「可隐藏」；为高频核心应用开启「锁定常驻」即可同时豁免沉淀、容量暂收与净空折叠。",
+                    "Untouched Visible icons settle into Hidden automatically; pin essential apps to exempt them from decay, spatial budget, and keep-pinned shield."
+                )
+            )
+            HStack {
+                Spacer()
+                Button(tr("前往智能自治设置", "Open Smart Bar Settings")) {
+                    engine.requestedSettingsPane = .smart
+                }
+                .controlSize(.small)
+            }
         }
     }
 

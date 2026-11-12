@@ -349,6 +349,11 @@ struct BarLensProfile: Codable, Equatable {
     var lensTelemetryEnabled: Bool? = nil
     var spatialBudgetPolicy: String? = nil
     var spatialExemptBundles: [String]? = nil
+    var usageDecayPolicy: String? = nil
+    var statusBubbleMode: String? = nil
+    var statusBubbleDwell: String? = nil
+    var presentationShieldPolicy: String? = nil
+    var autoPresentationShieldOnMirroring: Bool? = nil
 
     func encodedJSON() throws -> Data {
         let encoder = JSONEncoder()

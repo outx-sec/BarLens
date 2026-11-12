@@ -33,27 +33,6 @@ struct GeneralSettingsView: View {
                 .toggleStyle(.switch)
 
                 Picker(selection: Binding(
-                    get: { engine.spatialBudgetPolicy },
-                    set: { engine.setSpatialBudgetPolicy($0) })) {
-                    ForEach(SpatialBudgetPolicy.allCases) { policy in
-                        Text(policy.title).tag(policy)
-                    }
-                } label: {
-                    HStack(spacing: 6) {
-                        PreferenceLabel(symbol: "shield.lefthalf.filled", tone: .cyan, title: tr("顶栏容量保护", "Top Bar Budget"))
-                        if engine.tuckedOverflowCount > 0 {
-                            Text(tr("已暂收 \(engine.tuckedOverflowCount)", "\(engine.tuckedOverflowCount) Tucked"))
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(BarLensPalette.ink(.teal, in: engine.effectiveColorScheme))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 1.5)
-                                .background(BarLensPalette.badgeFill(.teal, in: engine.effectiveColorScheme), in: Capsule())
-                        }
-                    }
-                }
-                .pickerStyle(.menu)
-
-                Picker(selection: Binding(
                     get: { engine.hoverRevealDelay },
                     set: { engine.setHoverRevealDelay($0) })) {
                     ForEach(HoverRevealDelay.allCases) { delay in

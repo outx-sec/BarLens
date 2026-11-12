@@ -217,10 +217,12 @@ final class FloatingBarController {
             }
             .store(in: &cancellables)
 
-        Publishers.Merge3(
-            engine.$lensTelemetryEnabled.map { _ in () },
-            engine.$overflowDemotedBundleIDs.map { _ in () },
-            engine.$systemTelemetryRevision.map { _ in () }
+        Publishers.MergeMany(
+            engine.$lensTelemetryEnabled.map { _ in () }.eraseToAnyPublisher(),
+            engine.$overflowDemotedBundleIDs.map { _ in () }.eraseToAnyPublisher(),
+            engine.$shieldedBundleIDs.map { _ in () }.eraseToAnyPublisher(),
+            engine.$recentStatusBubbleHistory.map { _ in () }.eraseToAnyPublisher(),
+            engine.$systemTelemetryRevision.map { _ in () }.eraseToAnyPublisher()
         )
         .receive(on: DispatchQueue.main)
         .sink { [weak self] _ in
@@ -545,15 +547,25 @@ final class FloatingBarController {
     }
 
     private func hideSubmenuPanel() {
-        guard let submenuPanel, submenuPanel.isVisible else { return }
-        submenuPanel.orderOut(nil)
+        guard let submenuPanel else { return }
+        if submenuPanel.isVisible {
+            submenuPanel.orderOut(nil)
+        }
+        if submenuPanel.contentViewController != nil {
+            submenuPanel.contentViewController = nil
+        }
     }
 
     private func hideLoupePanel() {
         hideSubmenuPanel()
         engine.isLensLoupeHovered = false
-        guard let loupePanel, loupePanel.isVisible else { return }
-        loupePanel.orderOut(nil)
+        guard let loupePanel else { return }
+        if loupePanel.isVisible {
+            loupePanel.orderOut(nil)
+        }
+        if loupePanel.contentViewController != nil {
+            loupePanel.contentViewController = nil
+        }
     }
 
     func hide() {
@@ -561,9 +573,18 @@ final class FloatingBarController {
         loupeCoordinator.dismissImmediately()
         engine.isFloatingBarHovered = false
         engine.isLensLoupeHovered = false
-        submenuPanel?.orderOut(nil)
-        loupePanel?.orderOut(nil)
-        panel?.orderOut(nil)
+        if let submenuPanel {
+            if submenuPanel.isVisible { submenuPanel.orderOut(nil) }
+            if submenuPanel.contentViewController != nil { submenuPanel.contentViewController = nil }
+        }
+        if let loupePanel {
+            if loupePanel.isVisible { loupePanel.orderOut(nil) }
+            if loupePanel.contentViewController != nil { loupePanel.contentViewController = nil }
+        }
+        if let panel {
+            if panel.isVisible { panel.orderOut(nil) }
+            if panel.contentViewController != nil { panel.contentViewController = nil }
+        }
     }
 
     private func ensurePanel() -> NSPanel {
@@ -699,7 +720,9 @@ fileprivate struct FloatingBarItem: Identifiable {
     let telemetry: LensTelemetry
     let vitals: ProcessVitals?
     let isSpatialOverflow: Bool
+    let isShielded: Bool
     let isSpatiallyExempt: Bool
+    let pulseEvent: StatusBubbleEvent?
     let target: Target
 }
 
@@ -709,12 +732,13 @@ private enum FloatingBarItemBuilder {
     }
 
     static func tuckedOverflowItems(engine: DividerEngine, catalog: Catalog) -> [FloatingBarItem] {
-        guard !engine.overflowDemotedBundleIDs.isEmpty else { return [] }
+        let tuckedSet = engine.temporarilyTuckedBundleIDs
+        guard !tuckedSet.isEmpty else { return [] }
         let useMono = engine.floatingBarIconStyle == .monochrome
         let overflowApps = catalog.entries
             .filter {
                 $0.isRunning && $0.itemCount > 0
-                    && engine.overflowDemotedBundleIDs.contains($0.bundleID)
+                    && tuckedSet.contains($0.bundleID)
                     && engine.model.section(of: $0.bundleID) == .visible
             }
             .map { entry in
@@ -730,8 +754,10 @@ private enum FloatingBarItemBuilder {
                     section: .visible,
                     telemetry: engine.lensTelemetryEnabled ? entry.telemetry : .empty,
                     vitals: engine.lensTelemetryEnabled ? entry.vitals : nil,
-                    isSpatialOverflow: true,
+                    isSpatialOverflow: engine.overflowDemotedBundleIDs.contains(entry.bundleID),
+                    isShielded: engine.shieldedBundleIDs.contains(entry.bundleID),
                     isSpatiallyExempt: engine.isSpatiallyExempt(entry.bundleID),
+                    pulseEvent: engine.recentPulse(for: entry.bundleID),
                     target: .app(bundleID: entry.bundleID, isClassified: entry.isClassified)
                 )
             }
@@ -759,7 +785,9 @@ private enum FloatingBarItemBuilder {
                     telemetry: engine.lensTelemetryEnabled ? entry.telemetry : .empty,
                     vitals: engine.lensTelemetryEnabled ? entry.vitals : nil,
                     isSpatialOverflow: false,
+                    isShielded: false,
                     isSpatiallyExempt: engine.isSpatiallyExempt(entry.bundleID),
+                    pulseEvent: section == .hidden ? engine.recentPulse(for: entry.bundleID) : nil,
                     target: .app(bundleID: entry.bundleID, isClassified: entry.isClassified)
                 )
             }
@@ -779,7 +807,9 @@ private enum FloatingBarItemBuilder {
                     telemetry: engine.telemetry(for: sys),
                     vitals: nil,
                     isSpatialOverflow: false,
+                    isShielded: false,
                     isSpatiallyExempt: false,
+                    pulseEvent: nil,
                     target: .system(sys, isClassified: engine.systemItems.isClassified(sys))
                 )
             }
@@ -850,15 +880,17 @@ struct FloatingBarView: View {
     @State private var settleOffsetX: CGFloat = 0
 
     private var tuckedOverflowItems: [FloatingBarItem] {
-        FloatingBarItemBuilder.tuckedOverflowItems(engine: engine, catalog: catalog)
+        guard engine.reveal != .none else { return [] }
+        return FloatingBarItemBuilder.tuckedOverflowItems(engine: engine, catalog: catalog)
     }
 
     private var hiddenItems: [FloatingBarItem] {
-        FloatingBarItemBuilder.items(in: .hidden, engine: engine, catalog: catalog)
+        guard engine.reveal != .none else { return [] }
+        return FloatingBarItemBuilder.items(in: .hidden, engine: engine, catalog: catalog)
     }
 
     private var alwaysHiddenItems: [FloatingBarItem] {
-        guard engine.alwaysHiddenEnabled else { return [] }
+        guard engine.reveal != .none, engine.alwaysHiddenEnabled else { return [] }
         return FloatingBarItemBuilder.items(in: .alwaysHidden, engine: engine, catalog: catalog)
     }
 
@@ -1283,6 +1315,26 @@ private struct FloatingLensLoupeView: View {
                     .padding(.horizontal, 6)
                     .padding(.vertical, 1.5)
                     .background(Color(red: 0.90, green: 0.25, blue: 0.24), in: Capsule())
+            } else if let pulse = item.pulseEvent {
+                Text(tr("刚更新", "Updated"))
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
+                    .foregroundStyle(BarLensPalette.ink(pulse.reason.tone, in: colorScheme))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1.5)
+                    .background(BarLensPalette.badgeFill(pulse.reason.tone, in: colorScheme), in: Capsule())
+            } else if item.isShielded {
+                Text(tr("净空暂收", "Shielded"))
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
+                    .foregroundStyle(BarLensPalette.ink(.indigo, in: colorScheme))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1.5)
+                    .background(BarLensPalette.badgeFill(.indigo, in: colorScheme), in: Capsule())
             } else if item.isSpatialOverflow {
                 Text(tr("容量暂收", "Tucked"))
                     .font(.system(size: 9.5, weight: .semibold))
@@ -2664,6 +2716,15 @@ private struct FloatingBarGearButton: View {
                     lensItem.state = engine.lensTelemetryEnabled ? .on : .off
                     menu.addItem(lensItem)
 
+                    let shieldItem = MenuActionItem(
+                        title: tr("投屏净空盾", "Presentation Shield"),
+                        symbol: "shield.lefthalf.filled"
+                    ) {
+                        engine.togglePresentationShield()
+                    }
+                    shieldItem.state = engine.isPresentationShieldActive ? .on : .off
+                    menu.addItem(shieldItem)
+
                     menu.addItem(.separator())
                     let budgetHeader = NSMenuItem(title: tr("顶栏容量保护", "Top Bar Budget"), action: nil, keyEquivalent: "")
                     budgetHeader.isEnabled = false
@@ -2726,6 +2787,13 @@ private struct FloatingBarGearButton: View {
                     }
 
                     menu.addItem(.separator())
+                    menu.addItem(MenuActionItem(
+                        title: tr("智能自治设置…", "Smart Bar Settings…"),
+                        symbol: "wand.and.stars"
+                    ) {
+                        engine.requestedSettingsPane = .smart
+                        onOpenSettings()
+                    })
                     menu.addItem(MenuActionItem(
                         title: tr("使用指南…", "User Guide…"),
                         symbol: "book.closed"
@@ -2807,7 +2875,21 @@ private struct FloatingBarItemButton: View {
             isPressed: pressed
         ) {
             ZStack {
-                if item.isSpatialOverflow && !isActive {
+                if let pulse = item.pulseEvent, !isActive {
+                    Circle()
+                        .inset(by: 0.8)
+                        .strokeBorder(
+                            BarLensPalette.ink(pulse.reason.tone, in: colorScheme).opacity(0.72),
+                            lineWidth: 1.25
+                        )
+                } else if item.isShielded && !isActive {
+                    Circle()
+                        .inset(by: 1)
+                        .strokeBorder(
+                            BarLensPalette.ink(.indigo, in: colorScheme).opacity(0.50),
+                            lineWidth: 1.1
+                        )
+                } else if item.isSpatialOverflow && !isActive {
                     Circle()
                         .inset(by: 1)
                         .strokeBorder(
@@ -3053,12 +3135,12 @@ private struct FloatingBarItemButton: View {
 
         if case .app(let bundleID, _) = item.target,
            item.section == .visible,
-           engine.spatialBudgetPolicy != .off {
+           engine.hasActivePinningConsumers {
             let exempt = engine.isSpatiallyExempt(bundleID)
             let pinItem = MenuActionItem(
                 title: exempt
                     ? tr("取消顶栏锁定常驻", "Unpin from Top Bar")
-                    : tr("锁定顶栏常驻（免暂收）", "Pin to Top Bar (Never Tuck)"),
+                    : tr("锁定顶栏常驻", "Pin to Top Bar"),
                 symbol: exempt ? "pin.slash" : "pin.fill"
             ) {
                 engine.toggleSpatialExemption(for: bundleID)

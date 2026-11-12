@@ -51,6 +51,19 @@ final class DividerEngine: ObservableObject {
     @Published private(set) var spatialExemptBundleIDs = Defaults.spatialExemptBundleIDs
     @Published private(set) var overflowDemotedBundleIDs: Set<String> = []
     @Published private(set) var overflowDemotionReasons: [String: SpatialDemotionReason] = [:]
+    @Published private(set) var usageDecayPolicy = Defaults.usageDecayPolicy
+    @Published private(set) var autoDecayedBundleIDs = Defaults.autoDecayedBundleIDs
+    @Published private(set) var statusBubbleMode = Defaults.statusBubbleMode
+    @Published private(set) var statusBubbleDwell = Defaults.statusBubbleDwell
+    @Published private(set) var activeStatusBubbles: [String: StatusBubbleEvent] = [:]
+    @Published private(set) var recentStatusBubbleHistory: [StatusBubbleEvent] = []
+    @Published private(set) var presentationShieldPolicy = Defaults.presentationShieldPolicy
+    @Published private(set) var autoPresentationShieldOnMirroring = Defaults.autoPresentationShieldOnMirroring
+    @Published private(set) var manualPresentationShield = false
+    @Published private(set) var isDisplayMirrored = DisplayMirrorDetector.isAnyDisplayMirrored()
+    @Published private(set) var activePresentationSource: ScreenPresentationSource? =
+        DisplayMirrorDetector.isAnyDisplayMirrored() ? .hardwareMirror : nil
+    @Published private(set) var shieldedBundleIDs: Set<String> = []
     @Published private(set) var pinnedBundleID: String?
     @Published private(set) var pinnedSystemItemRawValue: Int?
     /// Where an application goes before the user has classified it.
@@ -71,6 +84,26 @@ final class DividerEngine: ObservableObject {
     private var activeDotDisplayID: DisplayID?
     private var fixedSystemBarWidth: CGFloat = 140
     private var itemLastInteractedAt: [String: TimeInterval] = Defaults.itemLastInteractedAt
+    private var itemFirstSeenAt: [String: TimeInterval] = Defaults.itemFirstSeenAt
+    private var usageDecayBaselineAt: TimeInterval = {
+        let existing = Defaults.usageDecayBaselineAt
+        if existing > 0 { return existing }
+        let now = Date().timeIntervalSince1970
+        Defaults.usageDecayBaselineAt = now
+        return now
+    }()
+    private var engineStartedAt: TimeInterval = Date().timeIntervalSince1970
+    private var mirroringShieldDismissedForSession = false
+    private var screenShareMonitor = ScreenShareSessionMonitor()
+    private var cachedReplaydPID: pid_t?
+    private var screenShareTimer: Timer?
+    private var statusBubbleTracker = StatusBubbleTracker()
+    private var statusBubbleExpiryTimer: Timer?
+    private var statusBubblePollTimer: Timer?
+    private var surfacedBubbleFrameSyncWork: DispatchWorkItem?
+    private var isPollingStatusBubbles = false
+    private var lastUsageDecayCheckAt: TimeInterval = 0
+    private var cachedOwnerIdentities: [String: (name: String, categoryType: String?)] = [:]
     private var frontmostMenuCheckWork: DispatchWorkItem?
     private var distributedObserver: NSObjectProtocol?
     private var themeDistributedObserver: NSObjectProtocol?
@@ -262,8 +295,18 @@ final class DividerEngine: ObservableObject {
     var visibleCount: Int { assignedCount(in: .visible) }
     var alwaysHiddenCount: Int { assignedCount(in: .alwaysHidden) }
     var revealableCount: Int { assignedCount(in: .hidden) }
-    var tuckedOverflowCount: Int { overflowDemotedBundleIDs.count }
+    var isPresentationShieldActive: Bool {
+        manualPresentationShield
+            || (autoPresentationShieldOnMirroring && isDisplayMirrored && !mirroringShieldDismissedForSession)
+    }
+    var temporarilyTuckedBundleIDs: Set<String> {
+        overflowDemotedBundleIDs.union(shieldedBundleIDs)
+    }
+    var tuckedOverflowCount: Int { temporarilyTuckedBundleIDs.count }
     var currentHiddenCount: Int { reveal == .none ? (revealableCount + tuckedOverflowCount) : 0 }
+    var hasActivePinningConsumers: Bool {
+        spatialBudgetPolicy != .off || usageDecayPolicy != .off || presentationShieldPolicy == .keepPinnedOnly
+    }
 
     /// Counts follow effective sections for items actually present on the menu bar.
     private func assignedCount(in section: SectionModel.Section) -> Int {
@@ -350,6 +393,8 @@ final class DividerEngine: ObservableObject {
         }
         observeLifecycle()
         refreshSystemAppearance()
+        engineStartedAt = Date().timeIntervalSince1970
+        refreshDisplayMirroringState(applyIfNeeded: false)
         // Write before launching: an old command can be stale after sleep or
         // a previous app exit, and must never kill the brand new helper.
         send(AgentCommand(mode: .suspend, allowed: []))
@@ -357,6 +402,8 @@ final class DividerEngine: ObservableObject {
         refreshRunningApplications()
         startHeartbeat()
         startPermissionPolling()
+        startScreenShareMonitoring()
+        startStatusBubblePolling()
         startHotkeys()
     }
 
@@ -459,7 +506,10 @@ final class DividerEngine: ObservableObject {
                     self.updateSpatialMeasurements(context: context, result: result)
                 }
                 let disabledInSystem = MenuBarLedger.disabledBundleIDs()
-                self.hasSystemLedger = ledger != nil
+                let newHasLedger = (ledger != nil)
+                if self.hasSystemLedger != newHasLedger {
+                    self.hasSystemLedger = newHasLedger
+                }
                 if let ledger { self.trustedLedgerOwners = ledger.intersection(self.runningBundleIDs) }
                 else { self.trustedLedgerOwners.formIntersection(self.runningBundleIDs) }
                 // Only treat apps with a real, live Accessibility status item on the
@@ -468,7 +518,18 @@ final class DividerEngine: ObservableObject {
                 // app's own settings or background helper processes with no icon.
                 self.ledgerOnlyOwners = []
                 self.bundlesWithItems = self.itemScanState.owners.subtracting(disabledInSystem)
-                self.systemItemModes = MenuBarBuiltIns.controlCenterModes()
+                let scanNow = Date().timeIntervalSince1970
+                self.recordFirstSeenIfNeeded(for: self.bundlesWithItems, now: scanNow)
+                self.lastUsageDecayCheckAt = scanNow
+                _ = self.evaluateUsageAutoDecay(now: scanNow)
+                if result.permissionGranted, !result.cancelled {
+                    self.evaluateStatusBubbles(from: self.retainedScanItems, now: scanNow)
+                    self.refreshDisplayMirroringState(applyIfNeeded: false)
+                }
+                let newModes = MenuBarBuiltIns.controlCenterModes()
+                if self.systemItemModes != newModes {
+                    self.systemItemModes = newModes
+                }
                 if result.completedOwners.contains("com.apple.MenuBarAgent") {
                     let isRestrictionActive = (self.currentCommand?.mode == .apply)
                     let hiddenByUs: Set<Int> = isRestrictionActive
@@ -498,7 +559,9 @@ final class DividerEngine: ObservableObject {
                     return
                 }
                 guard needsRetry else {
-                    self.scanWarning = nil
+                    if self.scanWarning != nil {
+                        self.scanWarning = nil
+                    }
                     self.diagnosticLog.record(event: attempt > 0 ? "catalog_scan_recovered" : "catalog_scan_completed", details: [
                         "attempt": String(attempt + 1), "ownerCount": String(self.bundlesWithItems.count),
                         "unobservedCount": String(result.unobservedOwners.count)])
@@ -536,6 +599,15 @@ final class DividerEngine: ObservableObject {
         popupWatchWork = nil
         frontmostMenuCheckWork?.cancel()
         frontmostMenuCheckWork = nil
+        statusBubbleExpiryTimer?.invalidate()
+        statusBubbleExpiryTimer = nil
+        statusBubblePollTimer?.invalidate()
+        statusBubblePollTimer = nil
+        surfacedBubbleFrameSyncWork?.cancel()
+        surfacedBubbleFrameSyncWork = nil
+        isPollingStatusBubbles = false
+        screenShareTimer?.invalidate()
+        screenShareTimer = nil
         if let localMouseDownMonitor {
             NSEvent.removeMonitor(localMouseDownMonitor)
             self.localMouseDownMonitor = nil
@@ -596,6 +668,7 @@ final class DividerEngine: ObservableObject {
         observe(workspace, NSWorkspace.willSleepNotification) { [weak self] in
             guard let self else { return }
             self.isSleeping = true
+            self.screenShareMonitor.reset()
             self.diagnosticLog.record(event: "system_will_sleep")
             self.recoveryStartedAt = nil
             self.recoveryStartedUptime = nil
@@ -614,18 +687,32 @@ final class DividerEngine: ObservableObject {
         for (name, reason) in wakeNotifications {
             observe(workspace, name) { [weak self] in
                 self?.isSleeping = false
+                self?.lastUsageDecayCheckAt = 0
                 self?.diagnosticLog.record(event: "wake_notification", details: ["reason": reason])
+                self?.refreshDisplayMirroringState(applyIfNeeded: false)
                 self?.scheduleAutoRehideIfNeeded()
                 self?.scheduleRecovery(reason: reason)
             }
         }
         observe(.default, NSApplication.didChangeScreenParametersNotification) { [weak self] in
             self?.latestDisplayGeometries = ItemEnumerator.displayMenuBarGeometries()
+            self?.refreshDisplayMirroringState(applyIfNeeded: true)
             self?.scheduleRecovery(reason: tr("显示器变化", "Display change"))
         }
-        observe(workspace, NSWorkspace.didActivateApplicationNotification) { [weak self] in
-            self?.scheduleFrontmostMenuCheck()
+        let activateToken = workspace.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self else { return }
+            self.scheduleFrontmostMenuCheck()
+            if let app = (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)
+                ?? NSWorkspace.shared.frontmostApplication,
+               let bid = app.bundleIdentifier {
+                self.noteApplicationActivated(bundleID: bid)
+            }
         }
+        lifecycleObservers.append((workspace, activateToken))
         if let distributedObserver {
             DistributedNotificationCenter.default().removeObserver(distributedObserver)
         }
@@ -716,17 +803,28 @@ final class DividerEngine: ObservableObject {
     private func ensureAgentIsHealthy() {
         guard isStarted, !isSleeping, recoveryWork == nil else { return }
         guard MBPrivateAPIAvailable() else {
-            connectionError = tr("这台系统不支持菜单栏隐藏接口。", "MenuBarAgent private API is not available on this macOS version.")
-            isRecovering = false
+            let unsupportedMsg = tr("这台系统不支持菜单栏隐藏接口。", "MenuBarAgent private API is not available on this macOS version.")
+            if connectionError != unsupportedMsg { connectionError = unsupportedMsg }
+            if isRecovering { isRecovering = false }
             return
         }
         let elapsed = Date().timeIntervalSince(lastAgentStart)
         if !agent.isRunning {
-            nextRetryAt = agent.nextRetryAt
+            if nextRetryAt != agent.nextRetryAt {
+                nextRetryAt = agent.nextRetryAt
+            }
             guard agent.canStartNow else {
-                isRecovering = false
-                connectionError = agent.lastExitDescription ?? connectionError ?? tr("助手暂时无法启动，稍后将自动重试。", "Helper is temporarily unavailable; retrying shortly.")
-                onChange?()
+                var didMutate = false
+                if isRecovering {
+                    isRecovering = false
+                    didMutate = true
+                }
+                let fallbackMsg = agent.lastExitDescription ?? connectionError ?? tr("助手暂时无法启动，稍后将自动重试。", "Helper is temporarily unavailable; retrying shortly.")
+                if connectionError != fallbackMsg {
+                    connectionError = fallbackMsg
+                    didMutate = true
+                }
+                if didMutate { onChange?() }
                 return
             }
             guard elapsed >= AgentCommand.heartbeatInterval else { return }
@@ -734,7 +832,7 @@ final class DividerEngine: ObservableObject {
             apply()
             guard writeCurrentCommand() else { return }
             beginRecovery(reason: tr("助手恢复", "Helper recovery"))
-            isRecovering = true
+            if !isRecovering { isRecovering = true }
             lastAgentStart = Date()
             agent.start()
             onChange?()
@@ -742,18 +840,34 @@ final class DividerEngine: ObservableObject {
         }
         if let pid = agent.processID, let status = AgentStatus.read(),
            status.isCurrent(sessionID: sessionID, processID: pid) {
-            connectionError = status.error
-            isRecovering = status.error == nil && (status.isApplying || status.requestID != currentCommand?.requestID)
-            nextRetryAt = nil
+            var uiStateChanged = false
+            let newRecovering = status.error == nil && (status.isApplying || status.requestID != currentCommand?.requestID)
+            if connectionError != status.error {
+                connectionError = status.error
+                uiStateChanged = true
+            }
+            if isRecovering != newRecovering {
+                isRecovering = newRecovering
+                uiStateChanged = true
+            }
+            if nextRetryAt != nil {
+                nextRetryAt = nil
+                uiStateChanged = true
+            }
             if let error = status.error, error != reportedAgentError {
                 diagnosticLog.record(event: "agent_reported_error", details: ["requestID": status.requestID])
             }
             reportedAgentError = status.error
-            if status.error == nil, !isRecovering {
+            if status.error == nil, !newRecovering {
                 agent.noteHealthy()
+                let hadPendingRecovery = (recoveryStartedAt != nil)
                 completeRecovery()
+                if hadPendingRecovery {
+                    uiStateChanged = true
+                }
                 if lastAcknowledgedRequest != status.requestID {
                     lastAcknowledgedRequest = status.requestID
+                    uiStateChanged = true
                     diagnosticLog.record(event: "command_acknowledged", details: [
                         "requestID": status.requestID, "pid": String(pid),
                         "mode": currentCommand?.mode.rawValue ?? "none"])
@@ -762,10 +876,16 @@ final class DividerEngine: ObservableObject {
             if status.error != nil, isScanningSystemItems {
                 interruptMeasurements()
                 apply()
+                uiStateChanged = true
             }
-            onChange?()
+            if uiStateChanged {
+                onChange?()
+            }
         } else if elapsed >= AgentCommand.stalenessTimeout {
-            connectionError = tr("菜单栏助手未响应，正在重新连接。", "Menu bar helper is unresponsive; reconnecting.")
+            let unresponsiveMsg = tr("菜单栏助手未响应，正在重新连接。", "Menu bar helper is unresponsive; reconnecting.")
+            if connectionError != unresponsiveMsg {
+                connectionError = unresponsiveMsg
+            }
             diagnosticLog.record(event: "agent_unresponsive", details: ["pid": agent.processID.map(String.init) ?? "none"])
             recoverConnection(reason: tr("助手无响应", "Helper unresponsive"))
         }
@@ -806,8 +926,9 @@ final class DividerEngine: ObservableObject {
 
     private func perform(_ action: HotkeyAction) {
         switch action {
-        case .toggleHidden:       toggleHidden()
-        case .toggleAlwaysHidden: toggleAlwaysHidden()
+        case .toggleHidden:             toggleHidden()
+        case .toggleAlwaysHidden:       toggleAlwaysHidden()
+        case .togglePresentationShield: togglePresentationShield()
         }
     }
 
@@ -943,10 +1064,11 @@ final class DividerEngine: ObservableObject {
 
         if runningBundleIDs.isEmpty { refreshRunningApplications() }
         recomputeSpatialBudget()
+        recomputePresentationShield()
 
-        // With nothing assigned and no spatial overflow to protect, stay suspended
-        // until there is actually something to hide.
-        guard isConfigured || !overflowDemotedBundleIDs.isEmpty else {
+        // With nothing assigned and no spatial overflow or presentation shield to enforce,
+        // stay suspended until there is actually something to hide.
+        guard isConfigured || !overflowDemotedBundleIDs.isEmpty || !shieldedBundleIDs.isEmpty else {
             send(AgentCommand(mode: .suspend, allowed: []))
             return
         }
@@ -962,8 +1084,9 @@ final class DividerEngine: ObservableObject {
                                            reveal: barReveal,
                                            alwaysHiddenEnabled: alwaysHiddenEnabled,
                                            listable: bundlesWithItems)
-        if barReveal == .none, !overflowDemotedBundleIDs.isEmpty {
-            allowed.removeAll { overflowDemotedBundleIDs.contains($0) }
+        let tuckedNow = temporarilyTuckedBundleIDs
+        if barReveal == .none, !tuckedNow.isEmpty {
+            allowed.removeAll { tuckedNow.contains($0) }
         }
         for item in systemItems.items where !item.hostBundleIDs.isEmpty {
             let suppressed = systemItems.isItemSuppressedOnBar(
@@ -973,6 +1096,20 @@ final class DividerEngine: ObservableObject {
             )
             if suppressed {
                 allowed.removeAll { item.hostBundleIDs.contains($0) }
+            }
+        }
+        let hasSurfacedBubble = reveal == .none
+            && statusBubbleMode == .surfaceTopBar
+            && !isPresentationShieldActive
+            && !activeStatusBubbles.isEmpty
+        if hasSurfacedBubble {
+            var didAppendBubble = false
+            for bubbledID in activeStatusBubbles.keys where runningBundleIDs.contains(bubbledID) && !allowed.contains(bubbledID) {
+                allowed.append(bubbledID)
+                didAppendBubble = true
+            }
+            if didAppendBubble {
+                allowed.sort()
             }
         }
         if let pinnedBundleID, runningBundleIDs.contains(pinnedBundleID), !allowed.contains(pinnedBundleID) {
@@ -985,7 +1122,7 @@ final class DividerEngine: ObservableObject {
             hiddenSys.removeAll { $0 == pinnedRaw }
         }
 
-        let hasPinnedTarget = pinnedBundleID != nil || pinnedSystemItemRawValue != nil
+        let hasPinnedTarget = pinnedBundleID != nil || pinnedSystemItemRawValue != nil || hasSurfacedBubble
         let hasHiddenControlCenter = systemItems.hasHiddenControlCenterItems(
             reveal: barReveal,
             alwaysHiddenEnabled: alwaysHiddenEnabled,
@@ -1118,6 +1255,11 @@ final class DividerEngine: ObservableObject {
             }
         }
         reveal = effectiveValue
+        if effectiveValue != .none && !activeStatusBubbles.isEmpty {
+            activeStatusBubbles.removeAll()
+            statusBubbleExpiryTimer?.invalidate()
+            statusBubbleExpiryTimer = nil
+        }
         scheduleAutoRehideIfNeeded()
         apply()
         onChange?()
@@ -1524,6 +1666,722 @@ final class DividerEngine: ObservableObject {
             itemLastInteractedAt = Dictionary(uniqueKeysWithValues: sorted.map { ($0.key, $0.value) })
         }
         Defaults.itemLastInteractedAt = itemLastInteractedAt
+        if autoDecayedBundleIDs.remove(bundleID) != nil {
+            Defaults.autoDecayedBundleIDs = autoDecayedBundleIDs
+        }
+        if activeStatusBubbles.removeValue(forKey: bundleID) != nil {
+            scheduleStatusBubbleExpiryTimer()
+            apply()
+            onChange?()
+        }
+    }
+
+    /// Passively records a direct user click on a native top-menu-bar icon using the latest cached AX snapshot.
+    func recordNativeTopBarClick(at appKitPoint: NSPoint) {
+        guard !retainedScanItems.isEmpty else { return }
+        let screens: [TopBarClickTracker.ScreenDescriptor] = NSScreen.screens.compactMap { screen in
+            guard let displayID = ItemEnumerator.displayID(for: screen) else { return nil }
+            return TopBarClickTracker.ScreenDescriptor(
+                displayID: displayID,
+                appKitFrame: screen.frame,
+                cgBounds: CGDisplayBounds(displayID.rawValue)
+            )
+        }
+        guard let matched = TopBarClickTracker.matchedOwnerBundleID(
+            appKitClickPoint: appKitPoint,
+            screens: screens,
+            items: retainedScanItems,
+            ownIdentifiers: SectionModel.ownIdentifiers,
+            notClassifiable: SectionModel.notClassifiable
+        ) else { return }
+
+        let now = Date().timeIntervalSince1970
+        itemLastInteractedAt[matched] = now
+        Defaults.itemLastInteractedAt = itemLastInteractedAt
+        if autoDecayedBundleIDs.remove(matched) != nil {
+            Defaults.autoDecayedBundleIDs = autoDecayedBundleIDs
+        }
+        // When the user clicks a temporarily surfaced bubble directly on the top menu bar,
+        // mark it handled so it retracts gracefully ~2s after they finish closing its menu.
+        if var activeBubble = activeStatusBubbles[matched] {
+            activeBubble.wasHandled = true
+            activeBubble.expiresAt = now + StatusBubbleDwell.postInteractionRetractDelay
+            activeStatusBubbles[matched] = activeBubble
+            scheduleStatusBubbleExpiryTimer()
+        }
+    }
+
+    private func noteApplicationActivated(bundleID: String) {
+        guard var activeBubble = activeStatusBubbles[bundleID] else { return }
+        let now = Date().timeIntervalSince1970
+        activeBubble.wasHandled = true
+        activeBubble.expiresAt = min(activeBubble.expiresAt, now + StatusBubbleDwell.postAppFocusRetractDelay)
+        activeStatusBubbles[bundleID] = activeBubble
+        scheduleStatusBubbleExpiryTimer()
+    }
+
+    // MARK: - Self-Curating Menu Bar (v1.1.0)
+
+    func setUsageDecayPolicy(_ policy: UsageDecayPolicy) {
+        guard usageDecayPolicy != policy else { return }
+        let wasOff = (usageDecayPolicy == .off)
+        usageDecayPolicy = policy
+        Defaults.usageDecayPolicy = policy
+        if wasOff && policy != .off {
+            let now = Date().timeIntervalSince1970
+            usageDecayBaselineAt = now
+            Defaults.usageDecayBaselineAt = now
+        }
+        evaluateUsageAutoDecay(now: Date().timeIntervalSince1970)
+        apply()
+        catalogRevision += 1
+        onChange?()
+    }
+
+    func activityBadgeText(for bundleID: String, now: TimeInterval = Date().timeIntervalSince1970) -> String {
+        UsageDecayPlanner.activityBadgeText(
+            lastInteractedAt: itemLastInteractedAt[bundleID] ?? 0,
+            firstSeenAt: itemFirstSeenAt[bundleID] ?? usageDecayBaselineAt,
+            isPinnedExempt: spatialExemptBundleIDs.contains(bundleID),
+            policy: usageDecayPolicy,
+            policyBaselineAt: usageDecayBaselineAt,
+            now: now
+        )
+    }
+
+    func dormantVisibleBundleIDs(now: TimeInterval = Date().timeIntervalSince1970) -> Set<String> {
+        let eligible = bundlesWithItems
+            .subtracting(SectionModel.ownIdentifiers)
+            .subtracting(SectionModel.notClassifiable)
+            .intersection(runningBundleIDs)
+            .filter { model.section(of: $0) == .visible }
+        let candidates = eligible.map { bundleID in
+            UsageDecayCandidate(
+                bundleID: bundleID,
+                isPinnedExempt: spatialExemptBundleIDs.contains(bundleID),
+                firstSeenAt: itemFirstSeenAt[bundleID] ?? now,
+                lastInteractedAt: itemLastInteractedAt[bundleID] ?? 0
+            )
+        }
+        return UsageDecayPlanner.evaluate(
+            policy: usageDecayPolicy,
+            candidates: candidates,
+            policyBaselineAt: usageDecayBaselineAt,
+            now: now
+        )
+    }
+
+    @discardableResult
+    func sweepDormantVisibleAppsNow() -> Int {
+        let now = Date().timeIntervalSince1970
+        let decayed = dormantVisibleBundleIDs(now: now)
+        guard !decayed.isEmpty else { return 0 }
+        for bundleID in decayed {
+            model.set(.hidden, for: bundleID)
+            autoDecayedBundleIDs.insert(bundleID)
+        }
+        Defaults.autoDecayedBundleIDs = autoDecayedBundleIDs
+        catalogRevision += 1
+        apply()
+        onChange?()
+        return decayed.count
+    }
+
+    func setStatusBubbleMode(_ mode: StatusBubbleMode) {
+        guard statusBubbleMode != mode else { return }
+        statusBubbleMode = mode
+        Defaults.statusBubbleMode = mode
+        if mode == .off && !activeStatusBubbles.isEmpty {
+            activeStatusBubbles.removeAll()
+            statusBubbleExpiryTimer?.invalidate()
+            statusBubbleExpiryTimer = nil
+        } else if mode == .surfaceTopBar && !activeStatusBubbles.isEmpty {
+            scheduleSurfacedBubbleFrameSync()
+        }
+        apply()
+        catalogRevision += 1
+        onChange?()
+    }
+
+    func setStatusBubbleDwell(_ dwell: StatusBubbleDwell) {
+        guard statusBubbleDwell != dwell else { return }
+        statusBubbleDwell = dwell
+        Defaults.statusBubbleDwell = dwell
+        if !activeStatusBubbles.isEmpty {
+            let now = Date().timeIntervalSince1970
+            for (bundleID, var event) in activeStatusBubbles where !event.wasHandled {
+                event.awaitsHandling = dwell.awaitsUserHandling(for: event.reason)
+                event.expiresAt = max(now + 1.5, event.triggeredAt + dwell.initialDuration(for: event.reason))
+                activeStatusBubbles[bundleID] = event
+            }
+            scheduleStatusBubbleExpiryTimer()
+        }
+        onChange?()
+    }
+
+    func dismissStatusBubble(for bundleID: String) {
+        guard activeStatusBubbles.removeValue(forKey: bundleID) != nil else { return }
+        scheduleStatusBubbleExpiryTimer()
+        apply()
+        onChange?()
+    }
+
+    func dismissAllStatusBubbles() {
+        guard !activeStatusBubbles.isEmpty else { return }
+        activeStatusBubbles.removeAll()
+        statusBubbleExpiryTimer?.invalidate()
+        statusBubbleExpiryTimer = nil
+        apply()
+        onChange?()
+    }
+
+    func clearStatusBubbleHistory() {
+        recentStatusBubbleHistory.removeAll()
+        onChange?()
+    }
+
+    func recentPulse(for bundleID: String, maxAge: TimeInterval = 45.0) -> StatusBubbleEvent? {
+        if let active = activeStatusBubbles[bundleID] {
+            return active
+        }
+        let now = Date().timeIntervalSince1970
+        let lastInteraction = itemLastInteractedAt[bundleID] ?? 0
+        return recentStatusBubbleHistory.first { event in
+            event.bundleID == bundleID
+                && (now - event.triggeredAt) <= maxAge
+                && event.triggeredAt > lastInteraction
+        }
+    }
+
+    func setPresentationShieldPolicy(_ policy: PresentationShieldPolicy) {
+        guard presentationShieldPolicy != policy else { return }
+        presentationShieldPolicy = policy
+        Defaults.presentationShieldPolicy = policy
+        apply()
+        catalogRevision += 1
+        onChange?()
+    }
+
+    func setAutoPresentationShieldOnMirroring(_ enabled: Bool) {
+        guard autoPresentationShieldOnMirroring != enabled else { return }
+        autoPresentationShieldOnMirroring = enabled
+        Defaults.autoPresentationShieldOnMirroring = enabled
+        if enabled {
+            mirroringShieldDismissedForSession = false
+        }
+        refreshDisplayMirroringState(applyIfNeeded: true)
+    }
+
+    func togglePresentationShield() {
+        setPresentationShieldActive(!isPresentationShieldActive)
+    }
+
+    func setPresentationShieldActive(_ active: Bool) {
+        if active {
+            manualPresentationShield = true
+            mirroringShieldDismissedForSession = false
+            if !activeStatusBubbles.isEmpty {
+                activeStatusBubbles.removeAll()
+                statusBubbleExpiryTimer?.invalidate()
+                statusBubbleExpiryTimer = nil
+            }
+            if reveal != .none {
+                reveal = .none
+                scheduleAutoRehideIfNeeded()
+            }
+        } else {
+            manualPresentationShield = false
+            if isDisplayMirrored && autoPresentationShieldOnMirroring {
+                mirroringShieldDismissedForSession = true
+            }
+        }
+        apply()
+        catalogRevision += 1
+        onChange?()
+    }
+
+    private func startScreenShareMonitoring() {
+        screenShareTimer?.invalidate()
+        screenShareTimer = Timer.scheduledTimer(withTimeInterval: 1.2, repeats: true) { [weak self] _ in
+            guard let self, self.isStarted, !self.isSleeping else { return }
+            self.refreshDisplayMirroringState(applyIfNeeded: true)
+        }
+        if let screenShareTimer {
+            RunLoop.main.add(screenShareTimer, forMode: .common)
+        }
+    }
+
+    func refreshDisplayMirroringState(applyIfNeeded: Bool = true) {
+        let wasShieldActive = isPresentationShieldActive
+        let now = Date().timeIntervalSince1970
+        let hardwareMirrored = DisplayMirrorDetector.isAnyDisplayMirrored()
+        let watcherActive = DisplayMirrorDetector.isWindowServerScreenWatcherActive()
+        let replaydSample = DisplayMirrorDetector.sampleReplaydTelemetry(now: now, cachedPID: &cachedReplaydPID)
+        let replaydStreaming = screenShareMonitor.ingestReplaydSample(replaydSample)
+        let menuBarIndicator = DisplayMirrorDetector.hasControlCenterScreenShareIndicator(in: latestScanItems ?? retainedScanItems)
+
+        let source = screenShareMonitor.update(
+            with: ScreenShareObservation(
+                isHardwareMirrored: hardwareMirrored,
+                isScreenWatcherActive: watcherActive,
+                isReplaydStreaming: replaydStreaming,
+                hasMenuBarIndicator: menuBarIndicator
+            ),
+            now: now
+        )
+        let presenting = (source != nil)
+        if !presenting {
+            mirroringShieldDismissedForSession = false
+        }
+        let changed = (isDisplayMirrored != presenting) || (activePresentationSource != source)
+        if isDisplayMirrored != presenting {
+            isDisplayMirrored = presenting
+        }
+        if activePresentationSource != source {
+            activePresentationSource = source
+        }
+
+        if isPresentationShieldActive {
+            if !activeStatusBubbles.isEmpty {
+                activeStatusBubbles.removeAll()
+                statusBubbleExpiryTimer?.invalidate()
+                statusBubbleExpiryTimer = nil
+            }
+            if !wasShieldActive && reveal != .none {
+                reveal = .none
+                scheduleAutoRehideIfNeeded()
+            }
+        }
+
+        if applyIfNeeded && (changed || wasShieldActive != isPresentationShieldActive) {
+            apply()
+            catalogRevision += 1
+            onChange?()
+        }
+    }
+
+    private func recomputePresentationShield() {
+        guard isPresentationShieldActive else {
+            if !shieldedBundleIDs.isEmpty {
+                shieldedBundleIDs = []
+            }
+            return
+        }
+        let visibleCandidates = bundlesWithItems
+            .union(ledgerOnlyOwners)
+            .subtracting(SectionModel.ownIdentifiers)
+            .subtracting(SectionModel.notClassifiable)
+            .intersection(runningBundleIDs)
+            .filter { model.section(of: $0) == .visible }
+        let computed = PresentationShieldEvaluator.shieldedBundleIDs(
+            isActive: true,
+            policy: presentationShieldPolicy,
+            visibleThirdPartyCandidates: Set(visibleCandidates),
+            pinnedExempt: spatialExemptBundleIDs
+        )
+        if computed != shieldedBundleIDs {
+            shieldedBundleIDs = computed
+        }
+    }
+
+    private func recordFirstSeenIfNeeded(for owners: Set<String>, now: TimeInterval) {
+        let classifiable = owners
+            .subtracting(SectionModel.ownIdentifiers)
+            .subtracting(SectionModel.notClassifiable)
+        var didMutate = false
+        for bundleID in classifiable where (itemFirstSeenAt[bundleID] ?? 0) <= 0 {
+            itemFirstSeenAt[bundleID] = now
+            didMutate = true
+        }
+        if itemFirstSeenAt.count > 180 {
+            let sorted = itemFirstSeenAt.sorted { $0.value > $1.value }.prefix(140)
+            itemFirstSeenAt = Dictionary(uniqueKeysWithValues: sorted.map { ($0.key, $0.value) })
+            didMutate = true
+        }
+        if didMutate {
+            Defaults.itemFirstSeenAt = itemFirstSeenAt
+        }
+    }
+
+    @discardableResult
+    private func evaluateUsageAutoDecay(now: TimeInterval) -> Bool {
+        guard usageDecayPolicy != .off else { return false }
+        let decayed = dormantVisibleBundleIDs(now: now)
+        guard !decayed.isEmpty else { return false }
+        for bundleID in decayed {
+            model.set(.hidden, for: bundleID)
+            autoDecayedBundleIDs.insert(bundleID)
+        }
+        Defaults.autoDecayedBundleIDs = autoDecayedBundleIDs
+        diagnosticLog.record(event: "usage_auto_decayed", details: [
+            "count": String(decayed.count),
+            "policy": usageDecayPolicy.rawValue
+        ])
+        return true
+    }
+
+    private func cachedOwnerIdentity(for bundleID: String) -> (name: String, categoryType: String?) {
+        if let cached = cachedOwnerIdentities[bundleID], cached.name != bundleID {
+            return cached
+        }
+        let runningApp = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first
+        let resolved = AppCatalog.lightweightIdentity(bundleID: bundleID, runningApp: runningApp)
+        cachedOwnerIdentities[bundleID] = resolved
+        return resolved
+    }
+
+    private func statusBubbleEligibleOwners() -> Set<String> {
+        func effectiveSection(_ sec: SectionModel.Section) -> SectionModel.Section {
+            !alwaysHiddenEnabled && sec == .alwaysHidden ? .hidden : sec
+        }
+        return bundlesWithItems
+            .subtracting(SectionModel.ownIdentifiers)
+            .subtracting(SectionModel.notClassifiable)
+            .intersection(runningBundleIDs)
+            .filter { bundleID in
+                let sec = effectiveSection(model.section(of: bundleID))
+                return sec == .hidden || overflowDemotedBundleIDs.contains(bundleID)
+            }
+    }
+
+    private func startStatusBubblePolling() {
+        statusBubblePollTimer?.invalidate()
+        statusBubblePollTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            guard let self, self.isStarted, !self.isSleeping else { return }
+            self.pollHiddenStatusBubblesIfNeeded()
+        }
+        if let statusBubblePollTimer {
+            RunLoop.main.add(statusBubblePollTimer, forMode: .common)
+        }
+    }
+
+    private func pollHiddenStatusBubblesIfNeeded() {
+        let now = Date().timeIntervalSince1970
+        if usageDecayPolicy != .off,
+           !isMeasuring, !isScanningSystemItems,
+           (now - lastUsageDecayCheckAt) >= 300 {
+            lastUsageDecayCheckAt = now
+            if evaluateUsageAutoDecay(now: now) {
+                catalogRevision += 1
+                apply()
+                onChange?()
+            }
+        }
+
+        guard statusBubbleMode != .off,
+              !isPresentationShieldActive,
+              reveal == .none,
+              hasAccessibility,
+              !isMeasuring,
+              !isScanningSystemItems,
+              !isPollingStatusBubbles else {
+            return
+        }
+
+        let eligibleOwners = statusBubbleEligibleOwners()
+        if eligibleOwners.isEmpty {
+            var didRemoveActive = false
+            for tracked in Array(statusBubbleTracker.baselines.keys) {
+                statusBubbleTracker.removeOwner(tracked)
+                if activeStatusBubbles.removeValue(forKey: tracked) != nil {
+                    didRemoveActive = true
+                }
+            }
+            if didRemoveActive {
+                scheduleStatusBubbleExpiryTimer()
+                apply()
+                onChange?()
+            }
+            return
+        }
+
+        let runningApps = NSWorkspace.shared.runningApplications
+        let targetApps: [ItemScanApplication] = runningApps.compactMap { app in
+            guard app.processIdentifier > 0,
+                  let bid = app.bundleIdentifier,
+                  eligibleOwners.contains(bid) else {
+                return nil
+            }
+            return ItemScanApplication(pid: app.processIdentifier, bundleID: bid)
+        }
+        guard !targetApps.isEmpty else { return }
+        let dockPID = runningApps.first(where: { $0.bundleIdentifier == "com.apple.dock" })?.processIdentifier
+
+        isPollingStatusBubbles = true
+        let pollGeneration = itemScanGeneration
+        itemScanQueue.async { [weak self] in
+            let polled = ItemEnumerator.pollSemanticSnapshot(applications: targetApps, dockPID: dockPID)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isPollingStatusBubbles = false
+                guard self.isStarted, !self.isSleeping,
+                      pollGeneration == self.itemScanGeneration else {
+                    return
+                }
+                let finishedNow = Date().timeIntervalSince1970
+                self.ingestPolledSemanticSnapshot(polled, eligibleOwners: eligibleOwners, now: finishedNow)
+            }
+        }
+    }
+
+    private func ingestPolledSemanticSnapshot(_ polled: ItemEnumerator.SemanticPollSnapshot,
+                                              eligibleOwners: Set<String>,
+                                              now: TimeInterval) {
+        // Quietly keep retained/latest scan item telemetry fresh for Floating Bar & Quick Panel
+        // without bumping @Published catalogRevision unless an actual bubble transition occurs.
+        if !retainedScanItems.isEmpty {
+            for idx in retainedScanItems.indices {
+                let bid = retainedScanItems[idx].ownerBundleID
+                guard eligibleOwners.contains(bid) else { continue }
+                retainedScanItems[idx].dockBadge = polled.dockBadges[bid]
+                if polled.completedOwners.contains(bid),
+                   let raws = polled.rawByOwner[bid],
+                   let matching = raws.first(where: { $0.indexInApp == retainedScanItems[idx].indexInApp }) ?? raws.first {
+                    retainedScanItems[idx].axTitle = matching.title
+                    retainedScanItems[idx].axDescription = matching.description
+                    retainedScanItems[idx].axValue = matching.value
+                    retainedScanItems[idx].axHelp = matching.help
+                }
+            }
+            latestScanItems = retainedScanItems
+        }
+
+        // Preserve previously scanned AX text for any owner whose AX read timed out on this tick.
+        var mergedRawByOwner = polled.rawByOwner
+        for item in retainedScanItems where eligibleOwners.contains(item.ownerBundleID) && !polled.completedOwners.contains(item.ownerBundleID) {
+            mergedRawByOwner[item.ownerBundleID, default: []].append(
+                RawAXItemTelemetry(
+                    indexInApp: item.indexInApp,
+                    identifier: item.axIdentifier,
+                    title: item.axTitle ?? item.label,
+                    description: item.axDescription,
+                    value: item.axValue,
+                    help: item.axHelp,
+                    menuEntries: item.axMenuEntries
+                )
+            )
+        }
+
+        var dockBadgesByOwner: [String: String] = [:]
+        for owner in eligibleOwners {
+            if let badge = polled.dockBadges[owner], !badge.isEmpty {
+                dockBadgesByOwner[owner] = badge
+            }
+        }
+
+        if processStatusBubbleObservations(
+            eligibleOwners: eligibleOwners,
+            rawByOwner: mergedRawByOwner,
+            dockBadgeByOwner: dockBadgesByOwner,
+            now: now
+        ) {
+            apply()
+            onChange?()
+        }
+    }
+
+    private func evaluateStatusBubbles(from scannedItems: [MenuBarItem], now: TimeInterval) {
+        let eligibleOwners = statusBubbleEligibleOwners()
+        var rawByOwner: [String: [RawAXItemTelemetry]] = [:]
+        var dockBadgeByOwner: [String: String] = [:]
+        for item in scannedItems where eligibleOwners.contains(item.ownerBundleID) {
+            rawByOwner[item.ownerBundleID, default: []].append(
+                RawAXItemTelemetry(
+                    indexInApp: item.indexInApp,
+                    identifier: item.axIdentifier,
+                    title: item.axTitle ?? item.label,
+                    description: item.axDescription,
+                    value: item.axValue,
+                    help: item.axHelp,
+                    menuEntries: item.axMenuEntries
+                )
+            )
+            if let badge = item.dockBadge, !badge.isEmpty {
+                dockBadgeByOwner[item.ownerBundleID] = badge
+            }
+        }
+
+        _ = processStatusBubbleObservations(
+            eligibleOwners: eligibleOwners,
+            rawByOwner: rawByOwner,
+            dockBadgeByOwner: dockBadgeByOwner,
+            now: now
+        )
+    }
+
+    @discardableResult
+    private func processStatusBubbleObservations(eligibleOwners: Set<String>,
+                                                 rawByOwner: [String: [RawAXItemTelemetry]],
+                                                 dockBadgeByOwner: [String: String],
+                                                 now: TimeInterval) -> Bool {
+        var didMutateActiveBubbles = false
+
+        // Drop stale baselines for apps that quit or moved into Visible / AlwaysHidden.
+        for tracked in Array(statusBubbleTracker.baselines.keys) where !eligibleOwners.contains(tracked) {
+            statusBubbleTracker.removeOwner(tracked)
+            if activeStatusBubbles.removeValue(forKey: tracked) != nil {
+                didMutateActiveBubbles = true
+            }
+        }
+
+        guard !eligibleOwners.isEmpty else {
+            if didMutateActiveBubbles {
+                scheduleStatusBubbleExpiryTimer()
+            }
+            return didMutateActiveBubbles
+        }
+
+        let allowBubbling = (statusBubbleMode != .off)
+            && !isPresentationShieldActive
+            && (reveal == .none)
+            && (now - engineStartedAt >= 3.5)
+
+        for bundleID in eligibleOwners {
+            let identity = cachedOwnerIdentity(for: bundleID)
+            let telemetry = SemanticLensExtractor.extract(
+                appName: identity.name,
+                bundleID: bundleID,
+                items: rawByOwner[bundleID] ?? [],
+                dockBadge: dockBadgeByOwner[bundleID],
+                categoryType: identity.categoryType
+            )
+            let snapshot = StatusBubbleTracker.snapshot(from: telemetry, categoryType: identity.categoryType)
+
+            // Auto-clear an active unread or warning bubble early when the underlying
+            // condition has already resolved (e.g. unread returned to 0 or warning cleared).
+            if let active = activeStatusBubbles[bundleID] {
+                switch active.reason {
+                case .unreadIncreased where snapshot.unreadCount == 0 && !snapshot.unreadOverflow:
+                    activeStatusBubbles.removeValue(forKey: bundleID)
+                    didMutateActiveBubbles = true
+                case .warningAlert where snapshot.statusTone != .warning:
+                    activeStatusBubbles.removeValue(forKey: bundleID)
+                    didMutateActiveBubbles = true
+                default:
+                    break
+                }
+            }
+
+            if let event = statusBubbleTracker.observe(
+                bundleID: bundleID,
+                appName: identity.name,
+                snapshot: snapshot,
+                allowBubbling: allowBubbling,
+                now: now,
+                dwell: statusBubbleDwell
+            ) {
+                activeStatusBubbles[bundleID] = event
+                recentStatusBubbleHistory.removeAll { $0.bundleID == bundleID }
+                recentStatusBubbleHistory.insert(event, at: 0)
+                if recentStatusBubbleHistory.count > 8 {
+                    recentStatusBubbleHistory = Array(recentStatusBubbleHistory.prefix(8))
+                }
+                didMutateActiveBubbles = true
+            }
+        }
+
+        if didMutateActiveBubbles {
+            scheduleStatusBubbleExpiryTimer()
+            if statusBubbleMode == .surfaceTopBar && !isPresentationShieldActive && reveal == .none && !activeStatusBubbles.isEmpty {
+                scheduleSurfacedBubbleFrameSync()
+            }
+        }
+        return didMutateActiveBubbles
+    }
+
+    /// Reads the live top-menu-bar frames of newly surfaced status-bubble items ~0.45s after
+    /// `MenuBarAgent` reveals them so direct clicks on surfaced icons hit-test accurately.
+    private func scheduleSurfacedBubbleFrameSync() {
+        surfacedBubbleFrameSyncWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.isStarted, !self.isSleeping,
+                  self.statusBubbleMode == .surfaceTopBar,
+                  !self.activeStatusBubbles.isEmpty else {
+                return
+            }
+            let surfacedIDs = Set(self.activeStatusBubbles.keys)
+            let apps: [ItemScanApplication] = NSWorkspace.shared.runningApplications.compactMap {
+                guard $0.processIdentifier > 0, let bid = $0.bundleIdentifier, surfacedIDs.contains(bid) else {
+                    return nil
+                }
+                return ItemScanApplication(pid: $0.processIdentifier, bundleID: bid)
+            }
+            let screens = ItemEnumerator.displayFrames()
+            guard !apps.isEmpty, !screens.isEmpty else { return }
+            self.itemScanQueue.async { [weak self] in
+                let liveFrames = ItemEnumerator.readLiveStatusItemFrames(applications: apps, screens: screens)
+                guard !liveFrames.isEmpty else { return }
+                DispatchQueue.main.async {
+                    guard let self, self.isStarted, !self.isSleeping else { return }
+                    for fresh in liveFrames {
+                        if let idx = self.retainedScanItems.firstIndex(where: {
+                            $0.ownerBundleID == fresh.ownerBundleID && $0.indexInApp == fresh.indexInApp
+                        }) {
+                            let old = self.retainedScanItems[idx]
+                            self.retainedScanItems[idx] = MenuBarItem(
+                                ownerBundleID: old.ownerBundleID,
+                                ownerPID: fresh.ownerPID,
+                                frame: fresh.frame,
+                                display: fresh.display,
+                                axIdentifier: old.axIdentifier,
+                                label: old.label,
+                                indexInApp: old.indexInApp,
+                                axTitle: old.axTitle,
+                                axDescription: old.axDescription,
+                                axValue: old.axValue,
+                                axHelp: old.axHelp,
+                                axMenuEntries: old.axMenuEntries,
+                                dockBadge: old.dockBadge,
+                                openWindowTitles: old.openWindowTitles
+                            )
+                        } else {
+                            self.retainedScanItems.append(fresh)
+                        }
+                    }
+                    self.latestScanItems = self.retainedScanItems
+                }
+            }
+        }
+        surfacedBubbleFrameSyncWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.48, execute: work)
+    }
+
+    private func scheduleStatusBubbleExpiryTimer() {
+        statusBubbleExpiryTimer?.invalidate()
+        statusBubbleExpiryTimer = nil
+        guard !activeStatusBubbles.isEmpty else { return }
+        let now = Date().timeIntervalSince1970
+        let earliest = activeStatusBubbles.values.map(\.expiresAt).min() ?? (now + 1.0)
+        let delay = max(0.25, earliest - now + 0.05)
+        let timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            self?.expireStatusBubbles()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        statusBubbleExpiryTimer = timer
+    }
+
+    private func expireStatusBubbles() {
+        guard isStarted, !isSleeping, !activeStatusBubbles.isEmpty else { return }
+        let now = Date().timeIntervalSince1970
+        let pointerInBar = Self.isPointerInMenuBarBand()
+        var didChange = false
+
+        for (bundleID, var event) in activeStatusBubbles where now >= event.expiresAt {
+            if statusBubbleMode == .surfaceTopBar
+                && (pointerInBar || ItemEnumerator.hasOpenPopupWindow(bundleID: bundleID)) {
+                event.expiresAt = now + 2.5
+                activeStatusBubbles[bundleID] = event
+            } else {
+                activeStatusBubbles.removeValue(forKey: bundleID)
+                didChange = true
+            }
+        }
+
+        scheduleStatusBubbleExpiryTimer()
+        if didChange {
+            apply()
+            onChange?()
+        }
     }
 
     private func updateSpatialMeasurements(context: ItemScanContext, result: ItemScanResult) {
@@ -1860,7 +2718,12 @@ final class DividerEngine: ObservableObject {
             hotkeys: hotkeysRaw,
             lensTelemetryEnabled: lensTelemetryEnabled,
             spatialBudgetPolicy: spatialBudgetPolicy.rawValue,
-            spatialExemptBundles: Array(spatialExemptBundleIDs).sorted()
+            spatialExemptBundles: Array(spatialExemptBundleIDs).sorted(),
+            usageDecayPolicy: usageDecayPolicy.rawValue,
+            statusBubbleMode: statusBubbleMode.rawValue,
+            statusBubbleDwell: statusBubbleDwell.rawValue,
+            presentationShieldPolicy: presentationShieldPolicy.rawValue,
+            autoPresentationShieldOnMirroring: autoPresentationShieldOnMirroring
         )
     }
 
@@ -1927,6 +2790,30 @@ final class DividerEngine: ObservableObject {
             spatialExemptBundleIDs = Set(exempt)
             Defaults.spatialExemptBundleIDs = spatialExemptBundleIDs
         }
+        if let rawDecay = profile.usageDecayPolicy,
+           let decay = UsageDecayPolicy(rawValue: rawDecay) {
+            usageDecayPolicy = decay
+            Defaults.usageDecayPolicy = decay
+        }
+        if let rawBubble = profile.statusBubbleMode,
+           let bubble = StatusBubbleMode(rawValue: rawBubble) {
+            statusBubbleMode = bubble
+            Defaults.statusBubbleMode = bubble
+        }
+        if let rawDwell = profile.statusBubbleDwell,
+           let dwell = StatusBubbleDwell(rawValue: rawDwell) {
+            statusBubbleDwell = dwell
+            Defaults.statusBubbleDwell = dwell
+        }
+        if let rawShield = profile.presentationShieldPolicy,
+           let shield = PresentationShieldPolicy(rawValue: rawShield) {
+            presentationShieldPolicy = shield
+            Defaults.presentationShieldPolicy = shield
+        }
+        if let autoShield = profile.autoPresentationShieldOnMirroring {
+            autoPresentationShieldOnMirroring = autoShield
+            Defaults.autoPresentationShieldOnMirroring = autoShield
+        }
 
         var newBindings: [HotkeyAction: Hotkey] = [:]
         for (rawAction, hotkey) in profile.hotkeys {
@@ -1987,6 +2874,17 @@ final class DividerEngine: ObservableObject {
 
     func setSection(_ section: SectionModel.Section, for bundleID: String) {
         model.set(section, for: bundleID)
+        if section == .visible {
+            itemLastInteractedAt[bundleID] = Date().timeIntervalSince1970
+            Defaults.itemLastInteractedAt = itemLastInteractedAt
+        }
+        if autoDecayedBundleIDs.remove(bundleID) != nil {
+            Defaults.autoDecayedBundleIDs = autoDecayedBundleIDs
+        }
+        if section != .hidden {
+            activeStatusBubbles.removeValue(forKey: bundleID)
+            scheduleStatusBubbleExpiryTimer()
+        }
         catalogRevision += 1
         apply()
         onChange?()
@@ -1994,6 +2892,9 @@ final class DividerEngine: ObservableObject {
 
     func removeAssignment(for bundleID: String) {
         model.removeAssignment(for: bundleID)
+        if autoDecayedBundleIDs.remove(bundleID) != nil {
+            Defaults.autoDecayedBundleIDs = autoDecayedBundleIDs
+        }
         catalogRevision += 1
         apply()
         onChange?()
@@ -2209,6 +3110,11 @@ final class DividerEngine: ObservableObject {
         systemItems.unassigned = .visible
         model.clear()
         systemItems.clearAssignments()
+        autoDecayedBundleIDs.removeAll()
+        Defaults.autoDecayedBundleIDs = autoDecayedBundleIDs
+        let resetNow = Date().timeIntervalSince1970
+        usageDecayBaselineAt = resetNow
+        Defaults.usageDecayBaselineAt = resetNow
         floatingBarOrder.reset()
         Defaults.floatingBarOrder = floatingBarOrder
         catalogRevision += 1

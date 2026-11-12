@@ -49,12 +49,15 @@ Click the **Eclipse Halo** trigger in your menu bar to unfurl hidden items in a 
 - **Drag-and-Drop Icon Reordering**: Drag icons directly inside the floating bar (or use right-click `Move to Front` / `Move to End`) to arrange your hidden items in any custom order.
 - **3 Built-In Optical Presets**: Switch effortlessly between **Crystal Lens** (default), **Obsidian Glass**, and **Prism Sheen**, or fine-tune **Glass Density** (`8%–75%`) and **Refractive Rim Intensity** (`40%–150%`) with a live interactive preview stage.
 
-### 2. Three-Tier Section Model & Spatial Budget Guard
+### 2. Self-Curating Menu Bar & Spatial Budget Guard
 Organize every application and built-in system item into three clear lists:
 ```text
 Visible (始终显示)   ·   Hidden (可隐藏)   ·   Always Hidden (永久隐藏)
 ```
-- **Spatial Budget & Notch Overflow Guard (`顶栏容量保护`)**: Measures MacBook Notch `NSScreen.auxiliaryTopRightArea`, frontmost app `AXMenuBar` width, or optional `5 / 8 / 12` visible-slot budgets (stabilized with hysteresis) to gracefully tuck overflow **Visible** apps into a leading **Tucked** cluster inside the Floating Bar instead of letting macOS swallow them—complete with per-app **Pin to Menu Bar** exemptions.
+- **Presentation & Screen-Sharing Shield (`投屏净空盾`)**: Automatically detects conferencing & browser screen sharing (`ScreenCaptureKit` / `CGDisplayStream`) as well as hardware display mirroring / AirPlay (`CGDisplayIsInMirrorSet`)—or toggles on demand from the Quick Panel pill or global shortcut—to temporarily tuck third-party menu bar icons away during meetings and presentations, restoring your exact layout the instant sharing ends.
+- **Zero-Capture Status Bubble-Up (`隐藏项状态突变冒泡`)**: Monitors semantic state transitions on **Hidden** apps (unread badge increments, warning escalations, discrete state flips) while automatically filtering continuous chatter (network speeds, percentages, timers, and rolling music lyrics) to light a non-vibrant sRGB badge pip on the trigger icon or surface the item onto the top bar with **Smart Adaptive Dwell** (actionable unread/alerts stay until clicked, app-focused, or resolved; calm state flips auto-tuck)—with zero Screen Recording permission.
+- **Usage Auto-Decay (`低频图标自动沉淀`)**: Passively tracks interactions on both the native menu bar and Floating Bar so rarely clicked **Visible** third-party icons (`3 / 7 / 14 / 30` days idle, with grace-period protection and 1-click manual sweep) gently settle into **Hidden**, while **Pin to Top Bar** apps stay permanently exempt.
+- **Spatial Budget & Notch Overflow Guard (`顶栏容量保护`)**: Measures MacBook Notch `NSScreen.auxiliaryTopRightArea`, frontmost app `AXMenuBar` width, or optional `5 / 8 / 12` visible-slot budgets (stabilized with hysteresis) to gracefully tuck overflow **Visible** apps into a leading **Tucked** cluster inside the Floating Bar instead of letting macOS swallow them—complete with per-app **Pin to Top Bar** exemptions.
 - **Per-Application Grouping**: Hiding operates by bundle identifier, so multi-icon apps move together cleanly without stranding orphan status items.
 - **One-Click Peek Pill**: When **Always Hidden** items exist, a compact purple glass badge (`+N`) appears inside the floating bar so you can peek at rarely used items on demand.
 - **Portable JSON Profile Backup**: Export and import your entire configuration (sections, custom icon order, hotkeys, and Liquid Glass optical tuning) as a single `BarLens-Profile.json` file.
@@ -100,7 +103,7 @@ BarLens integrates with both `MenuBarClientCore` assessment bitmasks and `com.ap
 - **Accessibility Permission** *(Used to enumerate menu bar items and proxy clicks).*
 
 ### Install from Release DMG / ZIP
-1. Download `BarLens-1.0.2.dmg` from **Releases** and drag **`BarLens.app`** into **`/Applications`**.
+1. Download `BarLens-1.1.0.dmg` from **Releases** and drag **`BarLens.app`** into **`/Applications`**.
 2. Clear the quarantine flag on first launch (since open-source builds are self-signed):
    ```bash
    xattr -d com.apple.quarantine /Applications/BarLens.app
@@ -126,7 +129,7 @@ While a visibility restriction is active, `MenuBarAgent` filters allowed items s
 `./build.sh` automatically uses a local `BarLens Dev` certificate if present, or **falls back to ad-hoc signing (`--sign -`)** with a warning so `git clone && ./build.sh` works immediately:
 
 ```bash
-# Run the test suite (75 unit tests)
+# Run the test suite (83 unit tests)
 swift test
 
 # Build and install to /Applications/BarLens.app

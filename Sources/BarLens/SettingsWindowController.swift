@@ -6,7 +6,7 @@ import SwiftUI
 /// A window rather than a SwiftUI `Settings` scene: the app is built on an
 /// AppKit `NSApplication` run loop so that it can own a status item, and mixing
 /// scene-based settings into that is more trouble than a hosting controller.
-final class SettingsWindowController: NSWindowController {
+final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     private let engine: DividerEngine
     private var hasPresentedOnce = false
@@ -18,7 +18,7 @@ final class SettingsWindowController: NSWindowController {
             contentRect: NSRect(x: 0, y: 0, width: 820, height: 600),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
-            defer: false)
+            defer: true)
         window.title = "BarLens"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
@@ -29,18 +29,34 @@ final class SettingsWindowController: NSWindowController {
         window.isReleasedWhenClosed = false
         let initialAppearance = engine.effectiveNSAppearance
         window.appearance = initialAppearance
-        let hosting = NSHostingController(rootView: SettingsView(engine: engine))
-        hosting.view.appearance = initialAppearance
-        window.contentViewController = hosting
-        // Hosting controllers initially size themselves to the SwiftUI minimum.
-        // Establish the comfortable default after attaching the content.
         window.setContentSize(NSSize(width: 820, height: 600))
         window.setFrameAutosaveName("BarLens.settings")
 
         super.init(window: window)
+        window.delegate = self
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    private func ensureContentViewController() {
+        guard let window, window.contentViewController == nil else { return }
+        let preservedFrame = window.frame
+        let target = engine.effectiveNSAppearance
+        let hosting = NSHostingController(rootView: SettingsView(engine: engine))
+        hosting.sizingOptions = []
+        hosting.view.appearance = target
+        window.contentViewController = hosting
+        if preservedFrame.width >= window.minSize.width,
+           preservedFrame.height >= window.minSize.height {
+            window.setFrame(preservedFrame, display: false)
+        } else {
+            window.setContentSize(NSSize(width: 820, height: 600))
+        }
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        window?.contentViewController = nil
+    }
 
     func syncAppearance() {
         let target = engine.effectiveNSAppearance
@@ -56,6 +72,7 @@ final class SettingsWindowController: NSWindowController {
             Defaults.settingsPane = pane.rawValue
             engine.requestedSettingsPane = pane
         }
+        ensureContentViewController()
         syncAppearance()
         placeOnActiveScreenIfNeeded()
         hasPresentedOnce = true

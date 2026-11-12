@@ -318,6 +318,14 @@ enum Defaults {
         static let spatialBudgetPolicy = "spatialBudgetPolicy"
         static let spatialExemptBundleIDs = "spatialExemptBundleIDs"
         static let itemLastInteractedAt = "itemLastInteractedAt"
+        static let itemFirstSeenAt = "itemFirstSeenAt"
+        static let usageDecayPolicy = "usageDecayPolicy"
+        static let usageDecayBaselineAt = "usageDecayBaselineAt"
+        static let autoDecayedBundleIDs = "autoDecayedBundleIDs"
+        static let statusBubbleMode = "statusBubbleMode"
+        static let statusBubbleDwell = "statusBubbleDwell"
+        static let presentationShieldPolicy = "presentationShieldPolicy"
+        static let autoPresentationShieldOnMirroring = "autoPresentationShieldOnMirroring"
     }
 
     static var lensTelemetryEnabled: Bool {
@@ -354,6 +362,82 @@ enum Defaults {
         }
         set {
             UserDefaults.standard.set(newValue, forKey: Key.itemLastInteractedAt)
+        }
+    }
+
+    static var itemFirstSeenAt: [String: TimeInterval] {
+        get {
+            (UserDefaults.standard.dictionary(forKey: Key.itemFirstSeenAt) as? [String: TimeInterval]) ?? [:]
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: Key.itemFirstSeenAt)
+        }
+    }
+
+    static var usageDecayPolicy: UsageDecayPolicy {
+        get {
+            UserDefaults.standard.string(forKey: Key.usageDecayPolicy)
+                .flatMap(UsageDecayPolicy.init(rawValue:)) ?? .days7
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: Key.usageDecayPolicy)
+        }
+    }
+
+    static var usageDecayBaselineAt: TimeInterval {
+        get {
+            UserDefaults.standard.double(forKey: Key.usageDecayBaselineAt)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: Key.usageDecayBaselineAt)
+        }
+    }
+
+    static var autoDecayedBundleIDs: Set<String> {
+        get {
+            Set(UserDefaults.standard.stringArray(forKey: Key.autoDecayedBundleIDs) ?? [])
+        }
+        set {
+            UserDefaults.standard.set(Array(newValue).sorted(), forKey: Key.autoDecayedBundleIDs)
+        }
+    }
+
+    static var statusBubbleMode: StatusBubbleMode {
+        get {
+            UserDefaults.standard.string(forKey: Key.statusBubbleMode)
+                .flatMap(StatusBubbleMode.init(rawValue:)) ?? .surfaceTopBar
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: Key.statusBubbleMode)
+        }
+    }
+
+    static var statusBubbleDwell: StatusBubbleDwell {
+        get {
+            UserDefaults.standard.string(forKey: Key.statusBubbleDwell)
+                .flatMap(StatusBubbleDwell.init(rawValue:)) ?? .smart
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: Key.statusBubbleDwell)
+        }
+    }
+
+    static var presentationShieldPolicy: PresentationShieldPolicy {
+        get {
+            UserDefaults.standard.string(forKey: Key.presentationShieldPolicy)
+                .flatMap(PresentationShieldPolicy.init(rawValue:)) ?? .allThirdParty
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: Key.presentationShieldPolicy)
+        }
+    }
+
+    static var autoPresentationShieldOnMirroring: Bool {
+        get {
+            UserDefaults.standard.object(forKey: Key.autoPresentationShieldOnMirroring) as? Bool ?? true
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: Key.autoPresentationShieldOnMirroring)
         }
     }
 

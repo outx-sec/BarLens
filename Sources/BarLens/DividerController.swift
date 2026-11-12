@@ -27,9 +27,11 @@ final class DividerController: NSObject, NSPopoverDelegate {
     )
 
     private var dotItem: NSStatusItem?
+    private var dotPulseBadgeView: DotPulseBadgeView?
     private var proxyItems: [String: NSStatusItem] = [:]
     private var proxyItemTargets: [String: SystemItem] = [:]
     private var rightClickMonitor: Any?
+    private var topBarClickMonitor: Any?
     private var localScrollMonitor: Any?
     private var globalScrollMonitor: Any?
     private var panelKeyMonitor: Any?
@@ -64,6 +66,7 @@ final class DividerController: NSObject, NSPopoverDelegate {
         closeQuickPanel()
         createDot()
         monitorRightClicks()
+        monitorTopBarClicks()
         monitorScrollWheel()
         monitorPanelKeys()
 
@@ -102,6 +105,8 @@ final class DividerController: NSObject, NSPopoverDelegate {
         hoverRevealWork = nil
         if let rightClickMonitor { NSEvent.removeMonitor(rightClickMonitor) }
         rightClickMonitor = nil
+        if let topBarClickMonitor { NSEvent.removeMonitor(topBarClickMonitor) }
+        topBarClickMonitor = nil
         if let localScrollMonitor { NSEvent.removeMonitor(localScrollMonitor) }
         localScrollMonitor = nil
         if let globalScrollMonitor { NSEvent.removeMonitor(globalScrollMonitor) }
@@ -110,6 +115,7 @@ final class DividerController: NSObject, NSPopoverDelegate {
         panelKeyMonitor = nil
         if let dotItem { NSStatusBar.system.removeStatusItem(dotItem) }
         dotItem = nil
+        dotPulseBadgeView = nil
         for (_, item) in proxyItems {
             NSStatusBar.system.removeStatusItem(item)
         }
@@ -148,6 +154,11 @@ final class DividerController: NSObject, NSPopoverDelegate {
             )
             tracker.autoresizingMask = [.width, .height]
             button.addSubview(tracker)
+
+            let badgeView = DotPulseBadgeView(frame: button.bounds)
+            badgeView.autoresizingMask = [.width, .height]
+            button.addSubview(badgeView)
+            dotPulseBadgeView = badgeView
         }
         dotItem = item
     }
@@ -184,6 +195,15 @@ final class DividerController: NSObject, NSPopoverDelegate {
             self.hoverRevealWork = nil
             self.toggleQuickPanel()
             return nil   // consumed
+        }
+    }
+
+    /// Passively observes user clicks in the macOS top menu bar band so frequently used
+    /// `.visible` status items refresh their activity timestamp and never falsely auto-decay.
+    private func monitorTopBarClicks() {
+        topBarClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            guard let self else { return }
+            self.engine.recordNativeTopBarClick(at: NSEvent.mouseLocation)
         }
     }
 
@@ -399,6 +419,7 @@ final class DividerController: NSObject, NSPopoverDelegate {
 
     func popoverDidClose(_ notification: Notification) {
         engine.isQuickPanelOpen = false
+        quickPopover?.contentViewController = nil
     }
 
     /// Escape belongs to the panel only. Other app windows and system key
@@ -417,6 +438,8 @@ final class DividerController: NSObject, NSPopoverDelegate {
         let hidden = engine.revealableCount
         let always = engine.alwaysHiddenCount
         let tucked = engine.tuckedOverflowCount
+        let shieldActive = engine.isPresentationShieldActive
+        let latestBubble = engine.activeStatusBubbles.values.max(by: { $0.triggeredAt < $1.triggeredAt })
         let state: String
         if engine.nextRetryAt != nil {
             state = tr("等待自动重连", "Waiting to reconnect")
@@ -424,6 +447,14 @@ final class DividerController: NSObject, NSPopoverDelegate {
             state = tr("正在恢复菜单栏连接", "Recovering menu bar connection")
         } else if let error = engine.connectionError ?? engine.lastError {
             state = tr("提示：\(error)", "Notice: \(error)")
+        } else if shieldActive {
+            let shieldedCount = engine.shieldedBundleIDs.count
+            state = tr(
+                "投屏净空盾已开启 · 已临时收纳 \(shieldedCount + hidden) 项",
+                "Presentation Shield Active · \(shieldedCount + hidden) items tucked"
+            )
+        } else if let bubble = latestBubble {
+            state = "\(bubble.appName) · \(bubble.reason.badgeText)"
         } else if !engine.isConfigured && tucked == 0 {
             state = tr("尚未划分，打开设置指定要隐藏的应用", "Not configured yet — open Settings to assign apps")
         } else if hidden == 0 && always == 0 && tucked == 0 {
@@ -451,18 +482,31 @@ final class DividerController: NSObject, NSPopoverDelegate {
 
         if let button = dotItem?.button {
             let hasWarning = engine.connectionError != nil || engine.nextRetryAt != nil
-            if let symbolName = engine.statusBarIconStyle.symbolName(for: engine.reveal),
+            let effectiveSymbolName: String? = shieldActive
+                ? (engine.reveal == .none ? "shield.lefthalf.filled" : "shield")
+                : engine.statusBarIconStyle.symbolName(for: engine.reveal)
+            let hasPulse = !hasWarning && !shieldActive && latestBubble != nil
+            let badgeTone: SemanticTone? = {
+                if hasWarning { return .orange }
+                if let bubble = latestBubble, hasPulse { return bubble.reason.tone }
+                return nil
+            }()
+
+            // Keep `contentTintColor == nil` and `button.image` as a pure native SF Symbol
+            // template image at all times. Setting `contentTintColor` on `NSStatusBarButton`
+            // disables macOS's menu-bar wallpaper vibrancy shader, causing the trigger icon
+            // to render black and vanish over dark wallpapers when macOS is in Light Mode.
+            button.contentTintColor = nil
+            if let symbolName = effectiveSymbolName,
                let baseImg = NSImage(systemSymbolName: symbolName, accessibilityDescription: "BarLens") {
                 let config = NSImage.SymbolConfiguration(pointSize: 12.5, weight: .semibold)
-                let img = baseImg.withSymbolConfiguration(config) ?? baseImg
-                img.isTemplate = !hasWarning
+                let symbolImg = baseImg.withSymbolConfiguration(config) ?? baseImg
+                symbolImg.isTemplate = true
                 button.title = ""
                 button.attributedTitle = NSAttributedString(string: "")
-                button.image = img
-                button.contentTintColor = hasWarning ? .systemOrange : nil
+                button.image = symbolImg
             } else {
                 button.image = nil
-                button.contentTintColor = nil
                 let glyph: String
                 switch engine.reveal {
                 case .none:   glyph = "●"
@@ -470,17 +514,11 @@ final class DividerController: NSObject, NSPopoverDelegate {
                 case .all:    glyph = "◉"
                 }
                 let font = NSFont.systemFont(ofSize: 10, weight: .medium)
-                if hasWarning {
-                    button.attributedTitle = NSAttributedString(
-                        string: glyph,
-                        attributes: [.font: font, .foregroundColor: NSColor.systemOrange]
-                    )
-                } else {
-                    button.attributedTitle = NSAttributedString(string: "")
-                    button.title = glyph
-                    button.font = font
-                }
+                button.attributedTitle = NSAttributedString(string: "")
+                button.title = glyph
+                button.font = font
             }
+            dotPulseBadgeView?.configure(tone: badgeTone)
             button.appearsDisabled = engine.isRecovering
             button.toolTip = state + "\n" + gestureHint
             button.setAccessibilityIdentifier("BarLens.dot")
@@ -579,7 +617,7 @@ final class DividerController: NSObject, NSPopoverDelegate {
 
     @objc private func openSettings() {
         closeQuickPanel()
-        settings.present()
+        settings.present(pane: engine.requestedSettingsPane)
     }
 
     @objc private func reconnectService() {
@@ -655,5 +693,63 @@ private final class DotHoverTrackingView: NSView {
 
     override func mouseExited(with event: NSEvent) {
         onHoverChanged(false)
+    }
+}
+
+/// Non-vibrant, zero-hit-testing true-color sRGB badge overlay placed inside `NSStatusBarButton`.
+/// Because `allowsVibrancy == false`, AppKit's status-bar monochrome vibrancy shader leaves this
+/// subview's vivid sRGB colors untouched while keeping the parent button's template icon 100%
+/// wallpaper-adaptive (bright white over dark wallpapers, dark charcoal over light wallpapers).
+private final class DotPulseBadgeView: NSView {
+    private var activeTone: SemanticTone?
+
+    override var allowsVibrancy: Bool { false }
+    override var isFlipped: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+        isHidden = true
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    func configure(tone: SemanticTone?) {
+        guard activeTone != tone else { return }
+        activeTone = tone
+        isHidden = (tone == nil)
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let activeTone, bounds.width > 8, bounds.height > 8 else { return }
+        let diameter: CGFloat = 5.6
+        let pipRect = NSRect(
+            x: round((bounds.midX + 4.2) * 2.0) / 2.0,
+            y: round((bounds.midY - 8.2) * 2.0) / 2.0,
+            width: diameter,
+            height: diameter
+        )
+
+        let outerHalo = pipRect.insetBy(dx: -1.1, dy: -1.1)
+        NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.42).setFill()
+        NSBezierPath(ovalIn: outerHalo).fill()
+
+        let innerRim = pipRect.insetBy(dx: -0.55, dy: -0.55)
+        NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.92).setFill()
+        NSBezierPath(ovalIn: innerRim).fill()
+
+        let coreColor: NSColor = (activeTone == .orange)
+            ? NSColor(srgbRed: 1.00, green: 0.58, blue: 0.04, alpha: 1.0)
+            : NSColor(srgbRed: 0.18, green: 0.76, blue: 0.98, alpha: 1.0)
+        coreColor.setFill()
+        NSBezierPath(ovalIn: pipRect).fill()
     }
 }

@@ -440,6 +440,22 @@ enum AppCatalog {
         return false
     }
 
+    static func lightweightIdentity(bundleID: String,
+                                    runningApp: NSRunningApplication?) -> (name: String, categoryType: String?) {
+        let resolvedURL = runningApp?.bundleURL ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+        let parentAppURL = resolvedURL.flatMap { enclosingApplicationBundleURL(for: $0) }
+        let directName = runningApp?.localizedName ?? resolvedURL.flatMap { localizedBundleDisplayName(for: $0) }
+        let parentName = parentAppURL.flatMap { localizedBundleDisplayName(for: $0) }
+        let finalName = preferredApplicationName(
+            primaryName: directName,
+            parentAppName: parentName,
+            bundleID: bundleID
+        )
+        let catType = (resolvedURL.flatMap(Bundle.init(url:))?.infoDictionary?["LSApplicationCategoryType"] as? String)
+            ?? (parentAppURL.flatMap(Bundle.init(url:))?.infoDictionary?["LSApplicationCategoryType"] as? String)
+        return (finalName, catType)
+    }
+
     private static func resolveAppInfo(bundleID: String, runningApp: NSRunningApplication?) -> AppInfo {
         let resolvedURL = runningApp?.bundleURL ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
         let parentAppURL = resolvedURL.flatMap { enclosingApplicationBundleURL(for: $0) }

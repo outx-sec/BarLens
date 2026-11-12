@@ -26,6 +26,54 @@ struct QuickPanelView: View {
         VStack(spacing: 0) {
             header.padding(.horizontal, 18).padding(.top, 16).padding(.bottom, 12)
             VStack(alignment: .leading, spacing: 12) {
+                if let latestBubble = engine.activeStatusBubbles.values.max(by: { $0.triggeredAt < $1.triggeredAt }) {
+                    let bubbleInk = BarLensPalette.ink(latestBubble.reason.tone, in: colorScheme)
+                    let extraCount = max(0, engine.activeStatusBubbles.count - 1)
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(bubbleInk)
+                            .frame(width: 6.5, height: 6.5)
+                        Text(latestBubble.appName)
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Text(latestBubble.reason.badgeText + (extraCount > 0 ? " +\(extraCount)" : ""))
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(bubbleInk)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Spacer(minLength: 4)
+                        Button {
+                            engine.dismissAllStatusBubbles()
+                        } label: {
+                            HStack(spacing: 3) {
+                                Image(systemName: "arrow.down.right.and.arrow.up.left")
+                                    .font(.system(size: 9.5, weight: .semibold))
+                                Text(tr("收起", "Tuck"))
+                                    .font(.system(size: 10.5, weight: .semibold))
+                            }
+                            .foregroundStyle(.primary.opacity(0.76))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3.5)
+                            .background(.primary.opacity(0.08), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .help(tr("立即收起当前临时浮现的状态提醒", "Tuck active status pulse immediately"))
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        BarLensPalette.badgeFill(latestBubble.reason.tone, in: colorScheme),
+                        in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 11, style: .continuous)
+                            .strokeBorder(bubbleInk.opacity(0.26), lineWidth: 0.75)
+                    }
+                }
                 revealControls
                 sectionOverview
                 inspection
@@ -92,7 +140,9 @@ struct QuickPanelView: View {
 
     private var header: some View {
         let statusColor = BarLensPalette.ink(connectionTone, in: colorScheme)
-        return HStack(spacing: 9) {
+        let shieldActive = engine.isPresentationShieldActive
+        let shieldInk = BarLensPalette.ink(.indigo, in: colorScheme)
+        return HStack(spacing: 8) {
             Image(nsImage: NSApp.applicationIconImage)
                 .interpolation(.high)
                 .antialiased(true)
@@ -102,7 +152,33 @@ struct QuickPanelView: View {
             Text("BarLens")
                 .font(.system(size: 14, weight: .semibold, design: .rounded))
                 .foregroundStyle(.primary)
+                .lineLimit(1)
             Spacer(minLength: 4)
+            Button {
+                engine.togglePresentationShield()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: shieldActive ? "shield.lefthalf.filled" : "shield")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text(shieldActive ? tr("净空开启", "Shield On") : tr("净空盾", "Shield"))
+                        .font(.system(size: 10.5, weight: .semibold))
+                }
+                .foregroundStyle(shieldActive ? Color.white : shieldInk)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(
+                    shieldActive
+                        ? BarLensPalette.selectionFill(in: colorScheme)
+                        : BarLensPalette.badgeFill(.indigo, in: colorScheme),
+                    in: Capsule()
+                )
+            }
+            .buttonStyle(QuickPanelButtonStyle())
+            .fixedSize(horizontal: true, vertical: false)
+            .help(shieldActive
+                  ? tr("点击退出投屏净空盾并恢复顶栏图标", "Exit Presentation Shield and restore top bar icons")
+                  : tr("一键隐去顶栏第三方图标（投屏 / 会议隐私保护）", "Hide third-party top bar icons for screen sharing"))
+
             HStack(spacing: 5) {
                 if engine.isRecovering {
                     ProgressView().controlSize(.mini)
@@ -114,6 +190,7 @@ struct QuickPanelView: View {
             .foregroundStyle(statusColor)
             .padding(.horizontal, 8.5).padding(.vertical, 5)
             .background(BarLensPalette.badgeFill(connectionTone, in: colorScheme), in: Capsule())
+            .fixedSize(horizontal: true, vertical: false)
             .accessibilityElement(children: .combine)
         }
     }
@@ -355,7 +432,7 @@ struct QuickPanelView: View {
         }
         switch row.target {
         case .app(let bundleID, let isClassified):
-            if selectedSection == .visible, engine.spatialBudgetPolicy != .off {
+            if selectedSection == .visible, engine.hasActivePinningConsumers {
                 Divider()
                 let exempt = engine.isSpatiallyExempt(bundleID)
                 Button {
@@ -364,7 +441,7 @@ struct QuickPanelView: View {
                     Label(
                         exempt
                             ? tr("取消顶栏锁定常驻", "Unpin from Top Bar")
-                            : tr("锁定顶栏常驻（免暂收）", "Pin to Top Bar (Never Tuck)"),
+                            : tr("锁定顶栏常驻", "Pin to Top Bar"),
                         systemImage: exempt ? "pin.slash" : "pin.fill"
                     )
                 }
@@ -521,16 +598,31 @@ struct QuickPanelView: View {
         let apps = catalog.entries
             .filter { $0.isRunning && $0.itemCount > 0 && effective(engine.model.section(of: $0.bundleID)) == selectedSection }
             .map { entry -> QuickPanelRow in
-                let isTucked = engine.overflowDemotedBundleIDs.contains(entry.bundleID)
-                let status = isTucked
-                    ? tr("容量暂收", "Tucked")
-                    : (!entry.isClassified && engine.unclassifiedSection != .visible ? tr("默认", "Default") : tr("运行中", "Running"))
+                let isShielded = engine.shieldedBundleIDs.contains(entry.bundleID)
+                let isOverflow = engine.overflowDemotedBundleIDs.contains(entry.bundleID)
+                let isAutoDecayed = selectedSection == .hidden && engine.autoDecayedBundleIDs.contains(entry.bundleID)
+                let status: String
+                if isShielded {
+                    status = tr("净空暂收", "Shielded")
+                } else if isOverflow {
+                    status = tr("容量暂收", "Tucked")
+                } else if isAutoDecayed {
+                    status = tr("闲置收纳", "Auto-Tucked")
+                } else if !entry.isClassified && engine.unclassifiedSection != .visible {
+                    status = tr("默认", "Default")
+                } else {
+                    status = tr("运行中", "Running")
+                }
                 let badge: QuickPanelRow.StatusBadge?
                 if engine.lensTelemetryEnabled, let unread = entry.telemetry.unreadBadge {
                     badge = .init(text: unread, tone: .orange)
+                } else if let pulse = engine.recentPulse(for: entry.bundleID) {
+                    badge = .init(text: pulse.reason.badgeText, tone: pulse.reason.tone)
                 } else if engine.lensTelemetryEnabled, let chip = entry.telemetry.shortChip {
                     badge = .init(text: chip, tone: .cyan)
-                } else if isTucked {
+                } else if isShielded {
+                    badge = .init(text: tr("净空", "Shield"), tone: .indigo)
+                } else if isOverflow {
                     badge = .init(text: tr("暂收", "Tucked"), tone: .teal)
                 } else {
                     badge = nil
